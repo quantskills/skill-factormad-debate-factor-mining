@@ -1,0 +1,22 @@
+__pycache__/
+*.pyc
+.DS_Store
+# Git 卫生:原始导出与大数据不入库
+*.parquet
+prices/
+real_runs/
+sources/
+.venv/
+outputs/
+.skill_outputs/
+examples/factormad_alpha_library/*
+!examples/factormad_alpha_library/library.json
+
+# Local/private datasets
+examples/market_data_2015_2026.csv
+*.local.json
+# Local API credentials
+.env
+.env.*
+!.env.example
+.git.old

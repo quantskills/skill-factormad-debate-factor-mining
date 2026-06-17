@@ -1,0 +1,5 @@
+name: factormad-debate-factor-mining
+entrypoint: SKILL.md
+display_name: FactorMAD Debate Factor Mining
+short_description: Mine code-based stock alpha factor candidates with a FactorMAD-style LLM debate workflow.
+default_prompt: Run a dry-run FactorMAD debate using examples/debate_input.json and summarize the timestamped output artifact paths.

@@ -1,0 +1,40 @@
+{
+  "market_data_csv_path": "toy_market_data.csv",
+  "dry_run": true,
+  "output_dir": "outputs/debate_example",
+  "insample_time_range": [
+    "2020-01-01",
+    "2020-01-10"
+  ],
+  "outsample_time_range": [
+    "2020-01-11",
+    "2020-01-20"
+  ],
+  "test_debug_range": [
+    "2020-01-01",
+    "2020-01-10"
+  ],
+  "test_symbols": [],
+  "demo_symbol": "",
+  "label_config": {
+    "price": "vwap",
+    "span": 5,
+    "preprocess": "cs_zscore"
+  },
+  "factor_requirement": "",
+  "examples": [],
+  "seed_factors_json_path": "",
+  "seed_alphas_json_path": "",
+  "llm_name": "",
+  "debate_jobs": 1,
+  "debate_max_rounds": 2,
+  "debate_max_tokens": 32768,
+  "agent_few_shots": 3,
+  "seed_metric_threshold": 0.3,
+  "factor_metric_threshold": 0.05,
+  "factor_correlation_threshold": 0.8,
+  "key_metric": "ICIR",
+  "use_factormad_alpha_library": false,
+  "few_shot_from_library": false,
+  "factormad_alpha_library_path": "examples/factormad_alpha_library/library.json"
+}

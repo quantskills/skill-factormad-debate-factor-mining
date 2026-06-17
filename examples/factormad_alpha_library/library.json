@@ -1,0 +1,35 @@
+[
+  {
+    "name": "example_close_vwap_gap",
+    "code": "def example_close_vwap_gap(data, window=5):\n    close = data['close'].astype(float)\n    vwap = data['vwap'].astype(float)\n    gap = close / (vwap.abs() + 1e-8) - 1.0\n    return gap.groupby(level='symbol', sort=False).transform(lambda s: s.rolling(window, min_periods=2).mean())\n",
+    "entry_function": "example_close_vwap_gap",
+    "hash": "example1",
+    "arguments": {
+      "window": 5
+    },
+    "metric": {
+      "IC": 0.01234,
+      "ICIR": 0.12345,
+      "O-IC": 0.01012,
+      "O-ICIR": 0.10123
+    },
+    "status": "effective",
+    "source": "example_library",
+    "created_at": "2026-06-15 00:00:00",
+    "updated_at": "2026-06-15 00:00:00",
+    "insample_time_range": [
+      "2020-01-01",
+      "2020-01-10"
+    ],
+    "outsample_time_range": [
+      "2020-01-11",
+      "2020-01-20"
+    ],
+    "market_data_csv_path": "examples/toy_market_data.csv",
+    "label_config": {
+      "price": "vwap",
+      "span": 5,
+      "preprocess": "cs_zscore"
+    }
+  }
+]
