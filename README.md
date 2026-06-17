@@ -6,6 +6,7 @@
 
 `role: skill` `platform: codex` `category: tooling` `status: runnable` `output: factor-candidates` `paradigm: llm multi-agent debate`
 
+
 ---
 
 `skill-factormad-debate-factor-mining` 是一个自包含的 QUANTSKILLS 社区 Skill。它参考 FactorMAD 论文中的核心思想：让两个 LLM Agent 围绕候选因子进行结构化辩论、批评、修正，并把候选因子输出为可执行 Python 函数，而不是限制在预定义算子集合里。
@@ -392,3 +393,11 @@ outputs/debate_example/
 ## License
 
 This project is licensed under the GNU General Public License v3.0. See [LICENSE](LICENSE).
+
+## 🐼 PandaAI / QUANTSKILLS 社群
+
+<div align="center">
+  <img src="https://raw.githubusercontent.com/quantskills/.github/main/profile/assets/pandaai-community-qr.jpg" alt="PandaAI 社群二维码" width="220">
+  <br>
+  <sub>扫码加入 PandaAI 社群，交流 QUANTSKILLS 技能、Agent 工作流与量化研究实践。</sub>
+</div>
