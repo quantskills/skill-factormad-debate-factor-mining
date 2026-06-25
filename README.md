@@ -2,6 +2,23 @@
 
 **简体中文** | [English](README.en.md)
 
+> **论文参考 / Paper Reference**
+>
+> 本项目的 FactorMAD-style 多智能体辩论式因子挖掘流程参考自：
+> Duan, Y., Zhang, C., and Li, J. **FactorMAD: A Multi-Agent Debate Framework Based on Large Language Models for Interpretable Stock Alpha Factor Mining**. In *Proceedings of the 6th ACM International Conference on AI in Finance (ICAIF '25)*, pp. 605-613. ACM, 2025. DOI: [10.1145/3768292.3770377](https://dl.acm.org/doi/10.1145/3768292.3770377)
+>
+> 本仓库是面向 Codex / QUANTSKILLS 的自包含工程化实现，非论文官方代码；实现细节、输入输出格式和运行环境等与论文原始实验可能不同。
+
+下图用于简要说明论文中的 FactorMAD 整体框架和代码型因子生成流程。
+
+<p align="center">
+  <img src="pipeline/framework.png" alt="FactorMAD framework" width="760">
+</p>
+
+<p align="center">
+  <img src="pipeline/pipeline.png" alt="FactorMAD factor generation pipeline" width="760">
+</p>
+
 不是因子库，也不是回测引擎，而是一个**FactorMAD 风格的 LLM 多智能体辩论式因子挖掘 Skill**：把“生成一个代码型股票 Alpha 因子”拆成可运行、可检查、可归档的标准流程。
 
 `role: skill` `platform: codex` `category: tooling` `status: runnable` `output: factor-candidates` `paradigm: llm multi-agent debate`

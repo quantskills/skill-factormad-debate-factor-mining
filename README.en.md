@@ -2,6 +2,23 @@
 
 [简体中文](README.md) | **English**
 
+> **Paper Reference**
+>
+> This project references the FactorMAD-style multi-agent debate workflow for alpha factor mining from:
+> Duan, Y., Zhang, C., and Li, J. **FactorMAD: A Multi-Agent Debate Framework Based on Large Language Models for Interpretable Stock Alpha Factor Mining**. In *Proceedings of the 6th ACM International Conference on AI in Finance (ICAIF '25)*, pp. 605-613. ACM, 2025. DOI: [10.1145/3768292.3770377](https://dl.acm.org/doi/10.1145/3768292.3770377)
+>
+> This repository is a self-contained engineering implementation for Codex / QUANTSKILLS, not the official paper code. Implementation details, input and output formats, runtime environment, and other behavior may differ from the original paper experiments.
+
+The figures below briefly illustrate the FactorMAD framework and the code-based factor generation pipeline from the paper.
+
+<p align="center">
+  <img src="pipeline/framework.png" alt="FactorMAD framework" width="760">
+</p>
+
+<p align="center">
+  <img src="pipeline/pipeline.png" alt="FactorMAD factor generation pipeline" width="760">
+</p>
+
 This is not a factor library or a backtest engine. It is a **FactorMAD-style LLM multi-agent debate skill** for turning "generate a code-based stock alpha factor" into a runnable, checkable, and auditable workflow.
 
 `role: skill` `platform: codex` `category: tooling` `status: runnable` `output: factor-candidates` `paradigm: llm multi-agent debate`
