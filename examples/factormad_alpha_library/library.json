@@ -1,7 +1,341 @@
 [
   {
+    "name": "congestion_effort_result_factor",
+    "code": "def congestion_effort_result_factor(data, body_window=5, vol_window=20, range_window=10, smooth_window=3, eps=1e-8):\n    by = 'symbol'\n    open_ = data['open'].astype(float)\n    close = data['close'].astype(float)\n    high = data['high'].astype(float)\n    low = data['low'].astype(float)\n    volume = data['volume'].astype(float)\n\n    open_ = open_.where(open_ > 0, np.nan)\n    close = close.where(close > 0, np.nan)\n    high = high.where(high > 0, np.nan)\n    low = low.where(low > 0, np.nan)\n    volume = volume.where(volume >= 0, np.nan)\n\n    bar_range = (high - low).where((high - low) >= 0, np.nan)\n    body_abs = (close - open_).abs()\n\n    body_to_range = body_abs / (bar_range + eps)\n    body_to_range = body_to_range.replace([np.inf, -np.inf], np.nan).clip(0.0, 1.0)\n    low_resolution = 1.0 - body_to_range\n\n    persist_low_resolution = low_resolution.groupby(level=by, sort=False).rolling(\n        body_window, min_periods=max(3, body_window // 2)\n    ).mean().reset_index(level=0, drop=True)\n\n    vol_mean = volume.groupby(level=by, sort=False).rolling(\n        vol_window, min_periods=max(5, vol_window // 3)\n    ).mean().reset_index(level=0, drop=True)\n    rel_vol = volume / (vol_mean + eps)\n    rel_vol = rel_vol.replace([np.inf, -np.inf], np.nan).clip(0.0, 4.0)\n\n    range_mean = bar_range.groupby(level=by, sort=False).rolling(\n        range_window, min_periods=max(4, range_window // 2)\n    ).mean().reset_index(level=0, drop=True)\n    rel_range = bar_range / (range_mean + eps)\n    rel_range = rel_range.replace([np.inf, -np.inf], np.nan).clip(0.0, 4.0)\n\n    raw = persist_low_resolution * rel_vol * rel_range\n\n    factor = raw.groupby(level=by, sort=False).rolling(\n        smooth_window, min_periods=1\n    ).mean().reset_index(level=0, drop=True)\n\n    return factor.replace([np.inf, -np.inf], np.nan)",
+    "entry_function": "congestion_effort_result_factor",
+    "hash": "0a986398",
+    "arguments": {
+      "body_window": 5,
+      "vol_window": 20,
+      "range_window": 10,
+      "smooth_window": 3,
+      "eps": 1e-08
+    },
+    "metric": {
+      "IC": 0.03068,
+      "ICIR": 0.45976,
+      "O-IC": 0.03233,
+      "O-ICIR": 0.45542
+    },
+    "status": "effective",
+    "source": "factormad",
+    "debate": "df5ca426",
+    "round": 7,
+    "created_at": "2026-06-18 16:35:03",
+    "updated_at": "2026-06-18 16:35:03",
+    "insample_time_range": [
+      "2018-01-01",
+      "2022-12-31"
+    ],
+    "outsample_time_range": [
+      "2023-01-11",
+      "2025-12-31"
+    ],
+    "market_data_csv_path": "/home/wangxueliang/quantskills/skill-factormad-debate-factor-mining/examples/market_data_2015_2026.csv"
+  },
+  {
+    "name": "vwap_dislocation_volume_reversal",
+    "code": "def vwap_dislocation_volume_reversal(data, gap_window=5, vol_window=20, range_window=10, eps=1e-8):\n    close = data['close'].astype(float)\n    high = data['high'].astype(float)\n    low = data['low'].astype(float)\n    volume = data['volume'].astype(float)\n\n    if 'vwap' in data.columns:\n        vwap = data['vwap'].astype(float)\n    else:\n        amount = data['amount'].astype(float) if 'amount' in data.columns else None\n        if amount is not None:\n            valid_volume_for_vwap = volume.where(volume > eps, np.nan)\n            vwap = amount.div(valid_volume_for_vwap)\n        else:\n            typical_price = (high + low + close) / 3.0\n            vwap = typical_price\n\n    by_symbol = 'symbol'\n\n    valid_close = close.where(close.abs() > eps, np.nan)\n    valid_vwap = vwap.where(vwap.abs() > eps, np.nan)\n    gap = close.div(valid_vwap + eps) - 1.0\n    gap = gap.replace([np.inf, -np.inf], np.nan)\n\n    gap_mean = gap.groupby(level=by_symbol, sort=False).transform(\n        lambda s: s.rolling(gap_window, min_periods=max(2, gap_window // 2)).mean()\n    )\n\n    valid_volume = volume.where(volume > 0, np.nan)\n    vol_ma = valid_volume.groupby(level=by_symbol, sort=False).transform(\n        lambda s: s.rolling(vol_window, min_periods=max(5, vol_window // 3)).mean()\n    )\n    vol_ma = vol_ma.where(vol_ma.abs() > eps, np.nan)\n    vol_ratio = valid_volume.div(vol_ma + eps)\n    vol_ratio = vol_ratio.replace([np.inf, -np.inf], np.nan).clip(lower=0.0, upper=3.0)\n\n    day_range = (high - low).where((high - low).abs() > eps, np.nan)\n    range_to_price = day_range.div(valid_close.abs() + eps)\n    range_to_price = range_to_price.replace([np.inf, -np.inf], np.nan)\n    range_norm = range_to_price.groupby(level=by_symbol, sort=False).transform(\n        lambda s: s.rolling(range_window, min_periods=max(3, range_window // 2)).mean()\n    )\n    range_norm = range_norm.where(range_norm.abs() > eps, np.nan)\n\n    factor = -gap_mean.mul(np.sqrt(vol_ratio)).div(range_norm + eps)\n    factor = factor.replace([np.inf, -np.inf], np.nan)\n    return factor",
+    "entry_function": "vwap_dislocation_volume_reversal",
+    "hash": "45be7258",
+    "arguments": {
+      "gap_window": 5,
+      "vol_window": 20,
+      "range_window": 10,
+      "eps": 1e-08
+    },
+    "metric": {
+      "IC": 0.03527,
+      "ICIR": 0.45739,
+      "O-IC": 0.02873,
+      "O-ICIR": 0.31162
+    },
+    "status": "effective",
+    "source": "factormad",
+    "debate": "7469ab61",
+    "round": 1,
+    "created_at": "2026-06-18 16:35:03",
+    "updated_at": "2026-06-18 16:35:03",
+    "insample_time_range": [
+      "2018-01-01",
+      "2022-12-31"
+    ],
+    "outsample_time_range": [
+      "2023-01-11",
+      "2025-12-31"
+    ],
+    "market_data_csv_path": "/home/wangxueliang/quantskills/skill-factormad-debate-factor-mining/examples/market_data_2015_2026.csv"
+  },
+  {
+    "name": "churn_inefficiency_factor",
+    "code": "def churn_inefficiency_factor(data, window=10, vol_window=20, eps=1e-8):\n    close = data['close'].astype(float)\n    volume = data['volume'].astype(float)\n    by = 'symbol'\n\n    valid_close = close.where(close > 0, np.nan)\n    valid_volume = volume.where(volume > 0, np.nan)\n\n    close_ret = valid_close.groupby(level=by, sort=False).pct_change()\n    abs_ret = close_ret.abs()\n\n    min_vol_obs = max(5, vol_window // 3)\n    vol_ma = valid_volume.groupby(level=by, sort=False).transform(\n        lambda s: s.rolling(vol_window, min_periods=min_vol_obs).mean()\n    )\n    vol_ma = vol_ma.where(vol_ma.abs() > eps, np.nan)\n    rel_vol = valid_volume.div(vol_ma + eps)\n    rel_vol = rel_vol.replace([np.inf, -np.inf], np.nan).clip(0.0, 5.0)\n\n    churn = rel_vol * abs_ret\n\n    min_win_obs = max(3, window // 2)\n    net_move = valid_close.groupby(level=by, sort=False).pct_change(window).abs()\n    path_move = abs_ret.groupby(level=by, sort=False).transform(\n        lambda s: s.rolling(window, min_periods=min_win_obs).sum()\n    )\n    path_move = path_move.where(path_move.abs() > eps, np.nan)\n\n    efficiency = net_move.div(path_move + eps)\n    efficiency = efficiency.replace([np.inf, -np.inf], np.nan).clip(0.0, 1.0)\n\n    avg_churn = churn.groupby(level=by, sort=False).transform(\n        lambda s: s.rolling(window, min_periods=min_win_obs).mean()\n    )\n\n    signed_trend = valid_close.groupby(level=by, sort=False).pct_change(window)\n\n    factor = -signed_trend * avg_churn * (1.0 - efficiency)\n    factor = factor.replace([np.inf, -np.inf], np.nan)\n    return factor",
+    "entry_function": "churn_inefficiency_factor",
+    "hash": "f0eafeb7",
+    "arguments": {
+      "window": 10,
+      "vol_window": 20,
+      "eps": 1e-08
+    },
+    "metric": {
+      "IC": 0.03422,
+      "ICIR": 0.44688,
+      "O-IC": 0.0424,
+      "O-ICIR": 0.479
+    },
+    "status": "effective",
+    "source": "factormad",
+    "debate": "7469ab61",
+    "round": 4,
+    "created_at": "2026-06-18 16:35:03",
+    "updated_at": "2026-06-18 16:35:03",
+    "insample_time_range": [
+      "2018-01-01",
+      "2022-12-31"
+    ],
+    "outsample_time_range": [
+      "2023-01-11",
+      "2025-12-31"
+    ],
+    "market_data_csv_path": "/home/wangxueliang/quantskills/skill-factormad-debate-factor-mining/examples/market_data_2015_2026.csv"
+  },
+  {
+    "name": "gap_rejection_volume_factor",
+    "code": "def gap_rejection_volume_factor(data, window=5, vol_window=20, eps=1e-8):\n    open_ = data['open'].astype(float)\n    close = data['close'].astype(float)\n    volume = data['volume'].astype(float)\n\n    prev_close = close.groupby(level='symbol', sort=False).shift(1)\n\n    gap = (open_ - prev_close) / (prev_close + eps)\n    intraday_follow = (close - open_) / (open_ + eps)\n\n    rejection = -(gap * intraday_follow)\n\n    rejection_mean = rejection.groupby(level='symbol', sort=False).transform(\n        lambda s: s.rolling(window, min_periods=max(2, window // 2)).mean()\n    )\n\n    vol_mean = volume.groupby(level='symbol', sort=False).transform(\n        lambda s: s.rolling(vol_window, min_periods=max(5, vol_window // 3)).mean()\n    )\n    vol_ratio = (volume / (vol_mean + eps)).clip(lower=0.0, upper=4.0)\n    vol_support = vol_ratio.groupby(level='symbol', sort=False).transform(\n        lambda s: s.rolling(window, min_periods=max(2, window // 2)).mean()\n    )\n\n    factor = rejection_mean * (0.5 + 0.5 * vol_support)\n    return factor.replace([np.inf, -np.inf], np.nan)",
+    "entry_function": "gap_rejection_volume_factor",
+    "hash": "25b73cc2",
+    "arguments": {
+      "window": 5,
+      "vol_window": 20,
+      "eps": 1e-08
+    },
+    "metric": {
+      "IC": 0.01998,
+      "ICIR": 0.44154,
+      "O-IC": 0.01794,
+      "O-ICIR": 0.37999
+    },
+    "status": "effective",
+    "source": "factormad",
+    "debate": "bde06e28",
+    "round": 10,
+    "created_at": "2026-06-18 16:35:03",
+    "updated_at": "2026-06-18 16:35:03",
+    "insample_time_range": [
+      "2018-01-01",
+      "2022-12-31"
+    ],
+    "outsample_time_range": [
+      "2023-01-11",
+      "2025-12-31"
+    ],
+    "market_data_csv_path": "/home/wangxueliang/quantskills/skill-factormad-debate-factor-mining/examples/market_data_2015_2026.csv"
+  },
+  {
+    "name": "close_location_volume_pressure_factor",
+    "code": "def close_location_volume_pressure_factor(data, window=6, vol_window=20, smooth_window=3, eps=1e-8):\n    close = data['close'].astype(float)\n    high = data['high'].astype(float)\n    low = data['low'].astype(float)\n    volume = data['volume'].astype(float)\n\n    bar_range = high - low\n    clv = ((close - low) - (high - close)) / (bar_range + eps)\n\n    clv_persist = clv.groupby(level='symbol', sort=False).transform(\n        lambda s: s.rolling(window, min_periods=max(3, window // 2)).mean()\n    )\n\n    vol_mean = volume.groupby(level='symbol', sort=False).transform(\n        lambda s: s.rolling(vol_window, min_periods=max(5, vol_window // 3)).mean()\n    )\n    vol_ratio = (volume / (vol_mean + eps)).clip(lower=0.0, upper=4.0)\n\n    raw = clv_persist * vol_ratio\n    factor = raw.groupby(level='symbol', sort=False).transform(\n        lambda s: s.rolling(smooth_window, min_periods=1).mean()\n    )\n\n    return factor.replace([np.inf, -np.inf], np.nan)",
+    "entry_function": "close_location_volume_pressure_factor",
+    "hash": "f43961de",
+    "arguments": {
+      "window": 6,
+      "vol_window": 20,
+      "smooth_window": 3,
+      "eps": 1e-08
+    },
+    "metric": {
+      "IC": 0.0261,
+      "ICIR": 0.34307,
+      "O-IC": 0.0257,
+      "O-ICIR": 0.26899
+    },
+    "status": "effective",
+    "source": "factormad",
+    "debate": "bde06e28",
+    "round": 4,
+    "created_at": "2026-06-18 16:35:03",
+    "updated_at": "2026-06-18 16:35:03",
+    "insample_time_range": [
+      "2018-01-01",
+      "2022-12-31"
+    ],
+    "outsample_time_range": [
+      "2023-01-11",
+      "2025-12-31"
+    ],
+    "market_data_csv_path": "/home/wangxueliang/quantskills/skill-factormad-debate-factor-mining/examples/market_data_2015_2026.csv"
+  },
+  {
+    "name": "compressed_breakout_quality_factor",
+    "code": "def compressed_breakout_quality_factor(data, trend_window=20, range_window=10, vol_window=20, smooth_window=3, eps=1e-8):\n    by = 'symbol'\n    close = data['close'].astype(float)\n    high = data['high'].astype(float)\n    low = data['low'].astype(float)\n    volume = data['volume'].astype(float)\n\n    valid_close = close.where(close > 0, np.nan)\n    valid_high = high.where(high > 0, np.nan)\n    valid_low = low.where(low > 0, np.nan)\n    valid_volume = volume.where(volume >= 0, np.nan)\n\n    bar_range = (valid_high - valid_low).where((valid_high - valid_low) >= 0, np.nan)\n    ret1 = valid_close.groupby(level=by, sort=False).pct_change()\n\n    min_trend_obs = max(5, trend_window // 2)\n    min_range_obs = max(4, range_window // 2)\n    min_vol_obs = max(5, vol_window // 2)\n\n    trend = valid_close.groupby(level=by, sort=False).pct_change(trend_window)\n\n    avg_abs_ret = ret1.abs().groupby(level=by, sort=False).transform(\n        lambda s: s.rolling(trend_window, min_periods=min_trend_obs).mean()\n    )\n    avg_abs_ret = avg_abs_ret.where(avg_abs_ret > eps, np.nan)\n\n    trend_eff_num = trend.abs()\n    trend_eff_den = avg_abs_ret * float(trend_window)\n    trend_efficiency = trend_eff_num / trend_eff_den.where(trend_eff_den.abs() > eps, np.nan)\n    trend_efficiency = trend_efficiency.replace([np.inf, -np.inf], np.nan).clip(0.0, 1.5)\n\n    avg_range = bar_range.groupby(level=by, sort=False).transform(\n        lambda s: s.rolling(range_window, min_periods=min_range_obs).mean()\n    )\n    avg_range = avg_range.where(avg_range > eps, np.nan)\n\n    close_den = valid_close.abs().where(valid_close.abs() > eps, np.nan)\n    range_to_close = avg_range / close_den\n    range_to_close = range_to_close.replace([np.inf, -np.inf], np.nan)\n    compression = 1.0 / (1.0 + range_to_close)\n    compression = compression.replace([np.inf, -np.inf], np.nan).clip(0.0, 1.0)\n\n    vol_mean = valid_volume.groupby(level=by, sort=False).transform(\n        lambda s: s.rolling(vol_window, min_periods=min_vol_obs).mean()\n    )\n    vol_mean = vol_mean.where(vol_mean > eps, np.nan)\n\n    rel_volume = valid_volume / vol_mean.where(vol_mean > eps, np.nan)\n    rel_volume = rel_volume.replace([np.inf, -np.inf], np.nan).clip(0.0, 3.0)\n\n    signed_breakout = np.sign(trend) * trend_efficiency * compression * rel_volume\n\n    factor = signed_breakout.groupby(level=by, sort=False).transform(\n        lambda s: s.rolling(smooth_window, min_periods=1).mean()\n    )\n\n    return factor.replace([np.inf, -np.inf], np.nan)",
+    "entry_function": "compressed_breakout_quality_factor",
+    "hash": "10752452",
+    "arguments": {
+      "trend_window": 20,
+      "range_window": 10,
+      "vol_window": 20,
+      "smooth_window": 3,
+      "eps": 1e-08
+    },
+    "metric": {
+      "IC": 0.03084,
+      "ICIR": 0.29947,
+      "O-IC": 0.03882,
+      "O-ICIR": 0.33873
+    },
+    "status": "effective",
+    "source": "factormad",
+    "debate": "df5ca426",
+    "round": 0,
+    "created_at": "2026-06-18 16:35:03",
+    "updated_at": "2026-06-18 16:35:03",
+    "insample_time_range": [
+      "2018-01-01",
+      "2022-12-31"
+    ],
+    "outsample_time_range": [
+      "2023-01-11",
+      "2025-12-31"
+    ],
+    "market_data_csv_path": "/home/wangxueliang/quantskills/skill-factormad-debate-factor-mining/examples/market_data_2015_2026.csv"
+  },
+  {
+    "name": "persistent_range_volume_trend_factor",
+    "code": "def persistent_range_volume_trend_factor(data, window=6, vol_window=20, trend_window=5, smooth_window=3, eps=1e-8):\n    by = 'symbol'\n    close = data['close'].astype(float)\n    high = data['high'].astype(float)\n    low = data['low'].astype(float)\n    volume = data['volume'].astype(float)\n\n    close = close.where(close > 0, np.nan)\n    high = high.where(high > 0, np.nan)\n    low = low.where(low > 0, np.nan)\n    volume = volume.where(volume >= 0, np.nan)\n\n    bar_range = high - low\n    bar_range = bar_range.where(bar_range >= 0, np.nan)\n\n    clv = ((close - low) - (high - close)) / (bar_range + eps)\n    clv = clv.replace([np.inf, -np.inf], np.nan).clip(-1.0, 1.0)\n\n    clv_persist = clv.groupby(level=by, sort=False).rolling(window, min_periods=max(3, window // 2)).mean().reset_index(level=0, drop=True)\n\n    vol_mean = volume.groupby(level=by, sort=False).rolling(vol_window, min_periods=max(5, vol_window // 3)).mean().reset_index(level=0, drop=True)\n    vol_ratio = volume / (vol_mean + eps)\n    vol_ratio = vol_ratio.replace([np.inf, -np.inf], np.nan).clip(0.0, 4.0)\n\n    trend = close.groupby(level=by, sort=False).pct_change(trend_window)\n    trend_sign = np.sign(trend)\n\n    raw = clv_persist * vol_ratio * trend_sign\n    factor = raw.groupby(level=by, sort=False).rolling(smooth_window, min_periods=1).mean().reset_index(level=0, drop=True)\n\n    return factor.replace([np.inf, -np.inf], np.nan)",
+    "entry_function": "persistent_range_volume_trend_factor",
+    "hash": "d613e66a",
+    "arguments": {
+      "window": 6,
+      "vol_window": 20,
+      "trend_window": 5,
+      "smooth_window": 3,
+      "eps": 1e-08
+    },
+    "metric": {
+      "IC": 0.01445,
+      "ICIR": 0.245,
+      "O-IC": 0.01345,
+      "O-ICIR": 0.1848
+    },
+    "status": "effective",
+    "source": "factormad",
+    "debate": "df5ca426",
+    "round": 2,
+    "created_at": "2026-06-18 16:35:03",
+    "updated_at": "2026-06-18 16:35:03",
+    "insample_time_range": [
+      "2018-01-01",
+      "2022-12-31"
+    ],
+    "outsample_time_range": [
+      "2023-01-11",
+      "2025-12-31"
+    ],
+    "market_data_csv_path": "/home/wangxueliang/quantskills/skill-factormad-debate-factor-mining/examples/market_data_2015_2026.csv"
+  },
+  {
+    "name": "turnover_displacement_friction_factor",
+    "code": "def turnover_displacement_friction_factor(data, vol_window=20, move_window=5, range_window=10, smooth_window=3, eps=1e-8):\n    by = 'symbol'\n    close = data['close'].astype(float)\n    high = data['high'].astype(float)\n    low = data['low'].astype(float)\n    volume = data['volume'].astype(float)\n\n    close = close.where(close > 0, np.nan)\n    high = high.where(high > 0, np.nan)\n    low = low.where(low > 0, np.nan)\n    volume = volume.where(volume >= 0, np.nan)\n\n    bar_range = high - low\n    bar_range = bar_range.where(bar_range >= 0, np.nan)\n\n    vol_mean = volume.groupby(level=by, sort=False).rolling(vol_window, min_periods=max(5, vol_window // 3)).mean().reset_index(level=0, drop=True)\n    rel_vol = volume / (vol_mean + eps)\n    rel_vol = rel_vol.replace([np.inf, -np.inf], np.nan).clip(0.0, 4.0)\n\n    cc_move = close.groupby(level=by, sort=False).pct_change(move_window).abs()\n    tr_mean = bar_range.groupby(level=by, sort=False).rolling(range_window, min_periods=max(4, range_window // 2)).mean().reset_index(level=0, drop=True)\n    norm_range = tr_mean / (close.abs() + eps)\n    norm_range = norm_range.replace([np.inf, -np.inf], np.nan)\n\n    displacement_eff = cc_move / (norm_range + eps)\n    displacement_eff = displacement_eff.replace([np.inf, -np.inf], np.nan).clip(0.0, 5.0)\n\n    friction = rel_vol / (1.0 + displacement_eff)\n    friction = friction.replace([np.inf, -np.inf], np.nan)\n\n    factor = friction.groupby(level=by, sort=False).rolling(smooth_window, min_periods=1).mean().reset_index(level=0, drop=True)\n    return factor.replace([np.inf, -np.inf], np.nan)",
+    "entry_function": "turnover_displacement_friction_factor",
+    "hash": "032c68bd",
+    "arguments": {
+      "vol_window": 20,
+      "move_window": 5,
+      "range_window": 10,
+      "smooth_window": 3,
+      "eps": 1e-08
+    },
+    "metric": {
+      "IC": 0.01453,
+      "ICIR": 0.21956,
+      "O-IC": 0.01585,
+      "O-ICIR": 0.22222
+    },
+    "status": "effective",
+    "source": "factormad",
+    "debate": "df5ca426",
+    "round": 6,
+    "created_at": "2026-06-18 16:35:03",
+    "updated_at": "2026-06-18 16:35:03",
+    "insample_time_range": [
+      "2018-01-01",
+      "2022-12-31"
+    ],
+    "outsample_time_range": [
+      "2023-01-11",
+      "2025-12-31"
+    ],
+    "market_data_csv_path": "/home/wangxueliang/quantskills/skill-factormad-debate-factor-mining/examples/market_data_2015_2026.csv"
+  },
+  {
+    "name": "intraday_reversal_liquidity_factor",
+    "code": "def intraday_reversal_liquidity_factor(data, short_window=5, long_window=20, vol_window=20, smooth_window=3, eps=1e-8):\n    open_ = data['open'].astype(float)\n    high = data['high'].astype(float)\n    low = data['low'].astype(float)\n    close = data['close'].astype(float)\n    volume = data['volume'].astype(float)\n\n    symbol_g = level='symbol'\n\n    valid_open = open_.where(open_.abs() > eps, np.nan)\n    intraday_ret = close.div(valid_open) - 1.0\n\n    day_range = (high - low).where((high - low).abs() > eps, np.nan)\n    close_pos = ((close - low).div(day_range)).clip(0.0, 1.0)\n    close_deviation = close_pos - 0.5\n\n    valid_volume = volume.where(volume >= 0, np.nan)\n    avg_volume = valid_volume.groupby(symbol_g, sort=False).transform(\n        lambda s: s.rolling(vol_window, min_periods=max(5, vol_window // 3)).mean()\n    )\n    avg_volume = avg_volume.where(avg_volume.abs() > eps, np.nan)\n    vol_ratio = valid_volume.div(avg_volume)\n    vol_ratio = vol_ratio.replace([np.inf, -np.inf], np.nan).clip(0.0, 5.0)\n\n    liquidity_weight = 1.0 + (vol_ratio - 1.0)\n    close_weight = 1.0 - close_deviation\n    raw = -intraday_ret * liquidity_weight * close_weight\n\n    smoothed = raw.groupby(symbol_g, sort=False).transform(\n        lambda s: s.rolling(smooth_window, min_periods=1).mean()\n    )\n\n    close_ret = close.groupby(symbol_g, sort=False).pct_change()\n    realized_vol = close_ret.groupby(symbol_g, sort=False).transform(\n        lambda s: s.rolling(long_window, min_periods=max(5, long_window // 3)).std()\n    )\n    realized_vol = realized_vol.where(realized_vol.abs() > eps, np.nan)\n\n    factor = smoothed.div(realized_vol + eps)\n    factor = factor.replace([np.inf, -np.inf], np.nan)\n    return factor",
+    "entry_function": "intraday_reversal_liquidity_factor",
+    "hash": "2bd7e41c",
+    "arguments": {
+      "short_window": 5,
+      "long_window": 20,
+      "vol_window": 20,
+      "smooth_window": 3,
+      "eps": 1e-08
+    },
+    "metric": {
+      "IC": 0.01467,
+      "ICIR": 0.21668,
+      "O-IC": 0.01745,
+      "O-ICIR": 0.20729
+    },
+    "status": "effective",
+    "source": "factormad",
+    "debate": "7469ab61",
+    "round": 0,
+    "created_at": "2026-06-18 16:35:03",
+    "updated_at": "2026-06-18 16:35:03",
+    "insample_time_range": [
+      "2018-01-01",
+      "2022-12-31"
+    ],
+    "outsample_time_range": [
+      "2023-01-11",
+      "2025-12-31"
+    ],
+    "market_data_csv_path": "/home/wangxueliang/quantskills/skill-factormad-debate-factor-mining/examples/market_data_2015_2026.csv"
+  },
+  {
+    "name": "conviction_instability_turnover_factor",
+    "code": "def conviction_instability_turnover_factor(data, instab_window=10, vol_window=20, range_window=10, smooth_window=3, eps=1e-8):\n    by = 'symbol'\n    open_ = data['open'].astype(float)\n    close = data['close'].astype(float)\n    high = data['high'].astype(float)\n    low = data['low'].astype(float)\n    volume = data['volume'].astype(float)\n\n    open_ = open_.where(open_ > 0, np.nan)\n    close = close.where(close > 0, np.nan)\n    high = high.where(high > 0, np.nan)\n    low = low.where(low > 0, np.nan)\n    volume = volume.where(volume >= 0, np.nan)\n\n    bar_range = (high - low).where((high - low) >= 0, np.nan)\n    body_abs = (close - open_).abs()\n\n    body_to_range = body_abs / (bar_range + eps)\n    body_to_range = body_to_range.replace([np.inf, -np.inf], np.nan).clip(0.0, 1.0)\n\n    conviction_instability = body_to_range.groupby(level=by, sort=False).rolling(\n        instab_window, min_periods=max(4, instab_window // 2)\n    ).std().reset_index(level=0, drop=True)\n\n    vol_mean = volume.groupby(level=by, sort=False).rolling(\n        vol_window, min_periods=max(5, vol_window // 3)\n    ).mean().reset_index(level=0, drop=True)\n    rel_vol = volume / (vol_mean + eps)\n    rel_vol = rel_vol.replace([np.inf, -np.inf], np.nan).clip(0.0, 4.0)\n\n    norm_range = bar_range / (close.abs() + eps)\n    norm_range = norm_range.replace([np.inf, -np.inf], np.nan)\n    range_mean = norm_range.groupby(level=by, sort=False).rolling(\n        range_window, min_periods=max(4, range_window // 2)\n    ).mean().reset_index(level=0, drop=True)\n    rel_range = norm_range / (range_mean + eps)\n    rel_range = rel_range.replace([np.inf, -np.inf], np.nan).clip(0.0, 4.0)\n\n    raw = conviction_instability * rel_vol / (1.0 + rel_range)\n    factor = raw.groupby(level=by, sort=False).rolling(\n        smooth_window, min_periods=1\n    ).mean().reset_index(level=0, drop=True)\n\n    return factor.replace([np.inf, -np.inf], np.nan)",
+    "entry_function": "conviction_instability_turnover_factor",
+    "hash": "bb0a4415",
+    "arguments": {
+      "instab_window": 10,
+      "vol_window": 20,
+      "range_window": 10,
+      "smooth_window": 3,
+      "eps": 1e-08
+    },
+    "metric": {
+      "IC": 0.01277,
+      "ICIR": 0.17439,
+      "O-IC": 0.03104,
+      "O-ICIR": 0.43029
+    },
+    "status": "effective",
+    "source": "factormad",
+    "debate": "df5ca426",
+    "round": 9,
+    "created_at": "2026-06-18 16:35:03",
+    "updated_at": "2026-06-18 16:35:03",
+    "insample_time_range": [
+      "2018-01-01",
+      "2022-12-31"
+    ],
+    "outsample_time_range": [
+      "2023-01-11",
+      "2025-12-31"
+    ],
+    "market_data_csv_path": "/home/wangxueliang/quantskills/skill-factormad-debate-factor-mining/examples/market_data_2015_2026.csv"
+  },
+  {
     "name": "example_close_vwap_gap",
-    "code": "def example_close_vwap_gap(data, window=5):\n    close = data['close'].astype(float)\n    vwap = data['vwap'].astype(float)\n    gap = close / (vwap.abs() + 1e-8) - 1.0\n    return gap.groupby(level='symbol', sort=False).transform(lambda s: s.rolling(window, min_periods=2).mean())\n",
+    "code": "def example_close_vwap_gap(data, window=5):\n    close = data['close'].astype(float)\n    vwap = data['vwap'].astype(float)\n    gap = close / (vwap.abs() + 1e-8) - 1.0\n    return gap.groupby(level='symbol', sort=False).transform(lambda s: s.rolling(window, min_periods=2).mean())",
     "entry_function": "example_close_vwap_gap",
     "hash": "example1",
     "arguments": {
