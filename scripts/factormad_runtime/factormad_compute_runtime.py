@@ -219,7 +219,7 @@ def _calc_csic(factor_series: pd.Series, label_series: pd.Series) -> pd.Series:
     data = pd.concat([factor_series.rename("factor"), label_series.rename("label")], axis=1).dropna()
     if data.empty:
         return pd.Series(dtype="float64")
-    return data.groupby("time").apply(lambda x: x["factor"].corr(x["label"]))
+    return data.groupby("time").apply(lambda x: x["factor"].corr(x["label"], method="spearman"))
 
 
 def _safe_float(value: Any) -> float:
