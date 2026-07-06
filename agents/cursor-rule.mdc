@@ -1,14 +1,26 @@
 ---
-description: 使用 FactorMAD 风格的多智能体辩论流程，从 OHLCV 行情数据中挖掘代码型股票 Alpha 因子。
-globs:
-  - "**/*.json"
-  - "**/*.csv"
+description: 当用户请求使用 FactorMAD 风格的 LLM 多智能体辩论流程挖掘代码型股票 Alpha 因子时，使用本 Skill。
 alwaysApply: false
 ---
 
-# FactorMAD Debate Factor Mining
+# FactorMAD Debate Factor Mining Skill
 
-当用户希望从 OHLCV 行情数据中生成、辩论、调试、验证、评分或导出代码型股票 Alpha 因子时，使用本规则。
+当用户请求 FactorMAD、LLM 多智能体辩论、Alpha 因子挖掘、代码型因子生成、因子调试、因子验证或候选因子导出时，使用本地 Skill 包。
+
+首选本地项目路径：
+
+```text
+.cursor/skills/factormad-debate-factor-mining
+```
+
+工作流：
+
+1. 先读取 `.cursor/skills/factormad-debate-factor-mining/SKILL.md`。
+2. 仅当 `SKILL.md` 要求或任务需要细节时，读取 `references/` 下的引用文件。
+3. 按照 `SKILL.md` 的说明，从 Skill 根目录运行内置脚本。
+4. 保持文档中定义的 API 名称、参数名、环境变量、文件路径、输出约定、验证边界和数据来源边界。
+5. 不要编造 Skill 文件中未支持的数据接口、API key、评价指标、因子定义、输出字段或运行时行为。
+6. 将输出视为量化研究候选因子，不要解释为投资建议、交易信号、收益承诺或生产交易验证。
 
 ## 运行入口
 

@@ -1,4 +1,22 @@
-# Portable Loader: FactorMAD Debate Factor Mining
+# Portable Loader Prompt
+
+在不原生识别 `SKILL.md` 文件夹的 Agent 平台中，使用下面的提示词加载本 Skill。
+
+```text
+你可以访问一个名为 factormad-debate-factor-mining 的本地 Skill，路径是：
+
+<FACTORMAD_DEBATE_FACTOR_MINING_SKILL_ROOT>
+
+当用户请求匹配该 Skill 的 SKILL.md 描述时：
+
+1. 先读取 <FACTORMAD_DEBATE_FACTOR_MINING_SKILL_ROOT>/SKILL.md。
+2. 严格按照 SKILL.md 中的工作流和边界说明执行。
+3. 仅在需要时读取 <FACTORMAD_DEBATE_FACTOR_MINING_SKILL_ROOT>/references/ 下的引用文件。
+4. 在读取相关说明后，从 Skill 根目录运行内置脚本。
+5. 保持文档中定义的 API 名称、参数名、环境变量、文件路径、输出约定、验证边界和数据来源边界。
+6. 不要编造 Skill 文件中未支持的数据接口、API key、评价指标、因子定义、输出字段或运行时行为。
+7. 将输出视为量化研究候选因子，不要解释为投资建议、交易信号、收益承诺或生产交易验证。
+```
 
 ## 用途
 

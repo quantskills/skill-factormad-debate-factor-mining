@@ -21,7 +21,7 @@
 
 不是因子库，也不是回测引擎，而是一个**FactorMAD 风格的 LLM 多智能体辩论式因子挖掘 Skill**：把“生成一个代码型股票 Alpha 因子”拆成可运行、可检查、可归档的标准流程。
 
-`role: skill` `platform: codex` `category: tooling` `status: runnable` `output: factor-candidates` `paradigm: llm multi-agent debate`
+`role: skill` `platform: codex` `category: tooling` `status: active` `validation: runnable` `output: factor-candidates` `paradigm: llm multi-agent debate`
 
 
 ---

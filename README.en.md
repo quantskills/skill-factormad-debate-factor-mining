@@ -21,7 +21,7 @@ The figures below briefly illustrate the FactorMAD framework and the code-based 
 
 This is not a factor library or a backtest engine. It is a **FactorMAD-style LLM multi-agent debate skill** for turning "generate a code-based stock alpha factor" into a runnable, checkable, and auditable workflow.
 
-`role: skill` `platform: codex` `category: tooling` `status: runnable` `output: factor-candidates` `paradigm: llm multi-agent debate`
+`role: skill` `platform: codex` `category: tooling` `status: active` `validation: runnable` `output: factor-candidates` `paradigm: llm multi-agent debate`
 
 ---
 
