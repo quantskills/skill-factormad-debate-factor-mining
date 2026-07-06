@@ -1,0 +1,99 @@
+---
+description: 使用 FactorMAD 风格的多智能体辩论流程，从 OHLCV 行情数据中挖掘代码型股票 Alpha 因子。
+globs:
+  - "**/*.json"
+  - "**/*.csv"
+alwaysApply: false
+---
+
+# FactorMAD Debate Factor Mining
+
+当用户希望从 OHLCV 行情数据中生成、辩论、调试、验证、评分或导出代码型股票 Alpha 因子时，使用本规则。
+
+## 运行入口
+
+在仓库根目录运行：
+
+```bash
+python scripts/factormad_debate_factor.py --input examples/debate_input.json
+```
+
+使用自定义输入文件：
+
+```bash
+python scripts/factormad_debate_factor.py --input <input-json>
+```
+
+指定输出目录：
+
+```bash
+python scripts/factormad_debate_factor.py --input <input-json> --output <output-dir>
+```
+
+## 输入配置
+
+运行前先阅读：
+
+```text
+references/input_schema.md
+```
+
+输入 JSON 至少需要提供：
+
+```text
+market_data_csv_path
+```
+
+真实 LLM 运行时应设置：
+
+```json
+"dry_run": false
+```
+
+测试安装、路径和输出格式时可以使用：
+
+```json
+"dry_run": true
+```
+
+## 环境变量
+
+真实 LLM 运行需要配置 OpenAI 或 OpenAI-compatible 服务。
+
+优先使用 FactorMAD 专用变量：
+
+```bash
+export FACTORMAD_OPENAI_API_KEY=...
+export FACTORMAD_OPENAI_MODEL=...
+export FACTORMAD_OPENAI_BASE_URL=...
+```
+
+也支持通用变量：
+
+```bash
+export OPENAI_API_KEY=...
+export OPENAI_MODEL=...
+export OPENAI_BASE_URL=...
+```
+
+仓库根目录 `.env` 也会被自动读取。
+
+## 输出文件
+
+运行后阅读：
+
+```text
+references/output_contract.md
+```
+
+稳定输出包括：
+
+```text
+factormad_debate_result.json
+debate_rounds.json
+accepted_factors.json
+```
+
+## 边界说明
+
+本 Skill 用于量化研究自动化。IC/ICIR 只作为轻量候选筛选指标，不代表组合级回测结果，不构成投资建议、收益承诺或生产交易验证。

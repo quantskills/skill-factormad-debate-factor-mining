@@ -7,12 +7,12 @@ quantSkills:
   repository_url: https://github.com/quantskills/skill-factormad-debate-factor-mining
   project_type: skill
   collection: factormad
-  license: GPL-3.0
+  license: GPL-3.0-only
   category: tooling
   tags: [factormad, alpha-factor-mining, multi-agent, debate, factor-debug]
   platforms: [codex]
   language: zh-en
-  status: activate
+  status: active
   validation_level: runnable
   maintainer_type: community
   requires: []

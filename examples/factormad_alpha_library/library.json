@@ -30,8 +30,7 @@
     "outsample_time_range": [
       "2023-01-11",
       "2025-12-31"
-    ],
-    "market_data_csv_path": "/home/wangxueliang/quantskills/skill-factormad-debate-factor-mining/examples/market_data_2015_2026.csv"
+    ]
   },
   {
     "name": "vwap_dislocation_volume_reversal",
@@ -63,8 +62,7 @@
     "outsample_time_range": [
       "2023-01-11",
       "2025-12-31"
-    ],
-    "market_data_csv_path": "/home/wangxueliang/quantskills/skill-factormad-debate-factor-mining/examples/market_data_2015_2026.csv"
+    ]
   },
   {
     "name": "churn_inefficiency_factor",
@@ -95,8 +93,7 @@
     "outsample_time_range": [
       "2023-01-11",
       "2025-12-31"
-    ],
-    "market_data_csv_path": "/home/wangxueliang/quantskills/skill-factormad-debate-factor-mining/examples/market_data_2015_2026.csv"
+    ]
   },
   {
     "name": "gap_rejection_volume_factor",
@@ -127,8 +124,7 @@
     "outsample_time_range": [
       "2023-01-11",
       "2025-12-31"
-    ],
-    "market_data_csv_path": "/home/wangxueliang/quantskills/skill-factormad-debate-factor-mining/examples/market_data_2015_2026.csv"
+    ]
   },
   {
     "name": "close_location_volume_pressure_factor",
@@ -160,8 +156,7 @@
     "outsample_time_range": [
       "2023-01-11",
       "2025-12-31"
-    ],
-    "market_data_csv_path": "/home/wangxueliang/quantskills/skill-factormad-debate-factor-mining/examples/market_data_2015_2026.csv"
+    ]
   },
   {
     "name": "compressed_breakout_quality_factor",
@@ -194,8 +189,7 @@
     "outsample_time_range": [
       "2023-01-11",
       "2025-12-31"
-    ],
-    "market_data_csv_path": "/home/wangxueliang/quantskills/skill-factormad-debate-factor-mining/examples/market_data_2015_2026.csv"
+    ]
   },
   {
     "name": "persistent_range_volume_trend_factor",
@@ -228,8 +222,7 @@
     "outsample_time_range": [
       "2023-01-11",
       "2025-12-31"
-    ],
-    "market_data_csv_path": "/home/wangxueliang/quantskills/skill-factormad-debate-factor-mining/examples/market_data_2015_2026.csv"
+    ]
   },
   {
     "name": "turnover_displacement_friction_factor",
@@ -262,8 +255,7 @@
     "outsample_time_range": [
       "2023-01-11",
       "2025-12-31"
-    ],
-    "market_data_csv_path": "/home/wangxueliang/quantskills/skill-factormad-debate-factor-mining/examples/market_data_2015_2026.csv"
+    ]
   },
   {
     "name": "intraday_reversal_liquidity_factor",
@@ -296,8 +288,7 @@
     "outsample_time_range": [
       "2023-01-11",
       "2025-12-31"
-    ],
-    "market_data_csv_path": "/home/wangxueliang/quantskills/skill-factormad-debate-factor-mining/examples/market_data_2015_2026.csv"
+    ]
   },
   {
     "name": "conviction_instability_turnover_factor",
@@ -330,8 +321,7 @@
     "outsample_time_range": [
       "2023-01-11",
       "2025-12-31"
-    ],
-    "market_data_csv_path": "/home/wangxueliang/quantskills/skill-factormad-debate-factor-mining/examples/market_data_2015_2026.csv"
+    ]
   },
   {
     "name": "example_close_vwap_gap",
@@ -359,7 +349,6 @@
       "2020-01-11",
       "2020-01-20"
     ],
-    "market_data_csv_path": "examples/toy_market_data.csv",
     "label_config": {
       "price": "vwap",
       "span": 5,
