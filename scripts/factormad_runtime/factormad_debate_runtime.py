@@ -18,8 +18,10 @@ from .factormad_compute_runtime import (
     SkillChatClient,
     compact_factor_info,
     complete_factor,
+    default_key_metric_for_evaluation_mode,
     hash_str,
     load_factormad_market_data,
+    normalize_evaluation_mode,
     parse_json,
     resolve_llm_name,
     write_factormad_json,
@@ -51,12 +53,20 @@ def _progress(enabled: bool, message: str) -> None:
         print(f"[FactorMAD/runtime] {message}", file=sys.stderr, flush=True)
 
 
+def _finite_metric_value(metric: dict[str, Any], key: str) -> float:
+    try:
+        value = float(metric.get(key, float("-inf")))
+    except Exception:
+        return float("-inf")
+    return value if np.isfinite(value) else float("-inf")
+
+
 def _metric_text(factor_info: dict[str, Any] | None, key_metric: str) -> str:
     if not factor_info:
         return "metric=n/a"
     metric = factor_info.get("metric") or {}
     parts: list[str] = []
-    for key in (key_metric, "IC", "O-ICIR", "O-IC"):
+    for key in (key_metric, "ICIR", "RankICIR", "HybridICIR", "IC", "RankIC", "O-ICIR", "O-RankICIR"):
         if key in metric and key not in {item.split("=")[0] for item in parts}:
             try:
                 parts.append(f"{key}={float(metric[key]):.5f}")
@@ -72,10 +82,16 @@ class FactorMADFactorSet:
         metric_threshold: float = 0.2,
         correlation_threshold: float = 0.8,
         key_metric: str = "ICIR",
+        evaluation_mode: str = "pearson_ic",
+        icir_threshold: float | None = None,
+        rank_icir_threshold: float | None = None,
     ):
         self.metric_threshold = metric_threshold
+        self.icir_threshold = metric_threshold if icir_threshold is None else float(icir_threshold)
+        self.rank_icir_threshold = metric_threshold if rank_icir_threshold is None else float(rank_icir_threshold)
         self.correlation_threshold = correlation_threshold
-        self.key_metric = key_metric
+        self.evaluation_mode = normalize_evaluation_mode(evaluation_mode)
+        self.key_metric = key_metric or default_key_metric_for_evaluation_mode(self.evaluation_mode)
         self.factors: dict[str, dict[str, Any]] = {}
         self.invalid_factors: dict[str, dict[str, Any]] = {}
         for info in factor_infos or []:
@@ -89,7 +105,7 @@ class FactorMADFactorSet:
         if is_sorted:
             factors = sorted(
                 factors,
-                key=lambda item: item.get("metric", {}).get(self.key_metric, float("-inf")),
+                key=lambda item: _finite_metric_value(item.get("metric") or {}, self.key_metric),
                 reverse=True,
             )
         return factors
@@ -121,12 +137,25 @@ class FactorMADFactorSet:
                 result_list.append((float(corr), bench_info))
         return sorted(result_list, key=lambda x: x[0], reverse=True)
 
+    def _passes_metric_threshold(self, factor_info: dict[str, Any]) -> bool:
+        metric = factor_info.get("metric") or {}
+        if self.evaluation_mode == "pearson_ic":
+            return _finite_metric_value(metric, "ICIR") >= self.icir_threshold
+        if self.evaluation_mode == "rank_ic":
+            return _finite_metric_value(metric, "RankICIR") >= self.rank_icir_threshold
+        if self.evaluation_mode == "hybrid":
+            return (
+                _finite_metric_value(metric, "ICIR") >= self.icir_threshold
+                and _finite_metric_value(metric, "RankICIR") >= self.rank_icir_threshold
+                and bool(factor_info.get("direction_consistent", False))
+            )
+        raise ValueError(f"unsupported evaluation_mode: {self.evaluation_mode}")
+
     def check(self, factor_info: dict[str, Any] | None) -> str:
         if not factor_info:
             return "invalid"
         try:
-            metric_value = float(factor_info.get("metric", {}).get(self.key_metric, float("-inf")))
-            if not np.isfinite(metric_value) or metric_value <= self.metric_threshold:
+            if not self._passes_metric_threshold(factor_info):
                 return "invalid"
             similar = self.correlation_retrieval(
                 factor_info,
@@ -405,6 +434,15 @@ def run_agent_debate(
             or agent2.gpt.conversation_tokens_num() > debate_max_tokens
         )
 
+    def _passes_seed_threshold(factor_info: dict[str, Any]) -> bool:
+        metric = factor_info.get("metric") or {}
+        if factorset.evaluation_mode == "hybrid":
+            return (
+                _finite_metric_value(metric, "HybridICIR") >= seed_metric_threshold
+                and bool(factor_info.get("direction_consistent", False))
+            )
+        return _finite_metric_value(metric, key_metric) >= seed_metric_threshold
+
     debate_round = 0
     debate_hash = hash_str(agent1.system_prompt + agent2.system_prompt, length=8)
     views: list[str] = []
@@ -443,10 +481,10 @@ def run_agent_debate(
         "status": init_status,
         "init_source": init_source,
     })
-    if init_factor_info["metric"].get(key_metric, float("-inf")) > seed_metric_threshold:
+    if _passes_seed_threshold(init_factor_info):
         _progress(
             show_progress,
-            f"job {job_index}: early stop because round 0 {key_metric} exceeds seed_metric_threshold={seed_metric_threshold}",
+            f"job {job_index}: early stop because round 0 {key_metric} reaches seed_metric_threshold={seed_metric_threshold}",
         )
         best_factor = init_compact
         return {
@@ -513,7 +551,7 @@ def run_agent_debate(
     if valid_generated:
         best_factor = sorted(
             valid_generated,
-            key=lambda item: item.get("metric", {}).get(key_metric, float("-inf")),
+            key=lambda item: _finite_metric_value(item.get("metric") or {}, key_metric),
             reverse=True,
         )[0]
 
@@ -565,8 +603,14 @@ def run_factormad_debate(input_data: dict[str, Any]) -> dict[str, Any]:
     debate_max_tokens = int(input_data.get("debate_max_tokens", 32 * 1024) or (32 * 1024))
     seed_metric_threshold = float(input_data.get("seed_metric_threshold", 0.3))
     factor_metric_threshold = float(input_data.get("factor_metric_threshold", 0.2))
+    icir_threshold = float(input_data.get("icir_threshold", factor_metric_threshold))
+    rank_icir_threshold = float(input_data.get("rank_icir_threshold", factor_metric_threshold))
     factor_correlation_threshold = float(input_data.get("factor_correlation_threshold", 0.8))
-    key_metric = str(input_data.get("key_metric", "ICIR")).strip() or "ICIR"
+    evaluation_mode = normalize_evaluation_mode(
+        input_data.get("evaluation_mode"),
+        legacy_key_metric=input_data.get("key_metric"),
+    )
+    key_metric = default_key_metric_for_evaluation_mode(evaluation_mode)
     debate_jobs = max(1, int(input_data.get("debate_jobs", 1) or 1))
     use_alpha_library = _to_bool(input_data.get("use_factormad_alpha_library"), default=False)
     few_shot_from_library = _to_bool(input_data.get("few_shot_from_library"), default=use_alpha_library)
@@ -580,7 +624,8 @@ def run_factormad_debate(input_data: dict[str, Any]) -> dict[str, Any]:
         show_progress,
         "configuration: "
         f"model={llm_name} jobs={debate_jobs} max_rounds={debate_max_rounds} "
-        f"few_shots={agent_few_shots} key_metric={key_metric}",
+        f"few_shots={agent_few_shots} evaluation_mode={evaluation_mode} key_metric={key_metric} "
+        f"icir_threshold={icir_threshold} rank_icir_threshold={rank_icir_threshold}",
     )
     _progress(
         show_progress,
@@ -594,6 +639,7 @@ def run_factormad_debate(input_data: dict[str, Any]) -> dict[str, Any]:
         outsample_time_range=(outsample[0], outsample[1]),
         label_config=label_config,
         demo_symbol=demo_symbol,
+        evaluation_mode=evaluation_mode,
     )
     debugger = FactorMADDebugger(
         evaluator=evaluator,
@@ -657,6 +703,9 @@ def run_factormad_debate(input_data: dict[str, Any]) -> dict[str, Any]:
         metric_threshold=factor_metric_threshold,
         correlation_threshold=factor_correlation_threshold,
         key_metric=key_metric,
+        evaluation_mode=evaluation_mode,
+        icir_threshold=icir_threshold,
+        rank_icir_threshold=rank_icir_threshold,
     )
 
     job_results: list[dict[str, Any]] = []
@@ -713,7 +762,7 @@ def run_factormad_debate(input_data: dict[str, Any]) -> dict[str, Any]:
     if valid_generated:
         best_factor = sorted(
             valid_generated,
-            key=lambda item: item.get("metric", {}).get(key_metric, float("-inf")),
+            key=lambda item: _finite_metric_value(item.get("metric") or {}, key_metric),
             reverse=True,
         )[0]
 
@@ -725,6 +774,10 @@ def run_factormad_debate(input_data: dict[str, Any]) -> dict[str, Any]:
         "insample_time_range": [str(insample[0]), str(insample[1])],
         "outsample_time_range": [str(outsample[0]), str(outsample[1])],
         "metric_time_ranges": evaluator.metric_time_ranges(),
+        "evaluation_mode": evaluation_mode,
+        "key_metric": key_metric,
+        "icir_threshold": icir_threshold,
+        "rank_icir_threshold": rank_icir_threshold,
         "debate_rounds": all_round_records,
         "generated_factors": all_generated_factors,
         "best_factor": best_factor,

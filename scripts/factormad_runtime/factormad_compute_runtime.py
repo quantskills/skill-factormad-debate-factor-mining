@@ -215,11 +215,50 @@ def run_with_timeout(func: Callable[[], Any], timeout_seconds: int) -> Any:
         signal.signal(signal.SIGALRM, previous)
 
 
-def _calc_csic(factor_series: pd.Series, label_series: pd.Series) -> pd.Series:
+EVALUATION_MODE_ALIASES = {
+    "pearson": "pearson_ic",
+    "pearson_ic": "pearson_ic",
+    "ic": "pearson_ic",
+    "rank": "rank_ic",
+    "rank_ic": "rank_ic",
+    "rankic": "rank_ic",
+    "spearman": "rank_ic",
+    "hybrid": "hybrid",
+}
+
+
+def normalize_evaluation_mode(value: Any = None, *, legacy_key_metric: Any = None) -> str:
+    raw = str(value or "").strip().lower().replace("-", "_")
+    if not raw:
+        legacy = str(legacy_key_metric or "").strip().lower().replace("-", "_")
+        if legacy in {"rankic", "rank_ic", "rankicir", "rank_icir"}:
+            raw = "rank_ic"
+        elif legacy in {"hybrid", "hybridir", "hybrid_icir"}:
+            raw = "hybrid"
+        else:
+            raw = "pearson_ic"
+    if raw not in EVALUATION_MODE_ALIASES:
+        raise ValueError("evaluation_mode must be one of: pearson_ic, rank_ic, hybrid")
+    return EVALUATION_MODE_ALIASES[raw]
+
+
+def default_key_metric_for_evaluation_mode(evaluation_mode: str) -> str:
+    mode = normalize_evaluation_mode(evaluation_mode)
+    if mode == "rank_ic":
+        return "RankICIR"
+    if mode == "hybrid":
+        return "HybridICIR"
+    return "ICIR"
+
+
+def _calc_csic(factor_series: pd.Series, label_series: pd.Series, *, method: str = "pearson") -> pd.Series:
+    method = str(method or "pearson").strip().lower()
+    if method not in {"pearson", "spearman"}:
+        raise ValueError("method must be pearson or spearman")
     data = pd.concat([factor_series.rename("factor"), label_series.rename("label")], axis=1).dropna()
     if data.empty:
         return pd.Series(dtype="float64")
-    return data.groupby("time").apply(lambda x: x["factor"].corr(x["label"], method="spearman"))
+    return data.groupby("time").apply(lambda x: x["factor"].corr(x["label"], method=method))
 
 
 def _safe_float(value: Any) -> float:
@@ -240,8 +279,14 @@ def metric_time_ranges(
     return {
         "IC": {"sample": "insample", "time_range": insample},
         "ICIR": {"sample": "insample", "time_range": insample},
+        "RankIC": {"sample": "insample", "time_range": insample},
+        "RankICIR": {"sample": "insample", "time_range": insample},
+        "HybridICIR": {"sample": "insample", "time_range": insample},
         "O-IC": {"sample": "outsample", "time_range": outsample},
         "O-ICIR": {"sample": "outsample", "time_range": outsample},
+        "O-RankIC": {"sample": "outsample", "time_range": outsample},
+        "O-RankICIR": {"sample": "outsample", "time_range": outsample},
+        "O-HybridICIR": {"sample": "outsample", "time_range": outsample},
     }
 
 
@@ -395,12 +440,14 @@ class LightweightFactorEvaluator:
         outsample_time_range: tuple[str, str],
         label_config: dict[str, Any],
         demo_symbol: str = "",
+        evaluation_mode: str = "pearson_ic",
     ):
         self.raw_data = raw_data.sort_index()
         self.insample_time_range = insample_time_range
         self.outsample_time_range = outsample_time_range
         self.label_config = label_config
         self.demo_symbol = demo_symbol
+        self.evaluation_mode = normalize_evaluation_mode(evaluation_mode)
         self._prepare_labels()
 
     def _prepare_labels(self) -> None:
@@ -507,35 +554,103 @@ class LightweightFactorEvaluator:
     def metric_time_ranges(self) -> dict[str, dict[str, Any]]:
         return metric_time_ranges(self.insample_time_range, self.outsample_time_range)
 
-    def calc_metric(self, factor_series: pd.Series) -> dict[str, float]:
+    @staticmethod
+    def _empty_metric_bundle() -> tuple[dict[str, float], dict[str, Any]]:
+        metric = {
+            "IC": float("nan"),
+            "ICIR": float("nan"),
+            "RankIC": float("nan"),
+            "RankICIR": float("nan"),
+            "HybridICIR": float("nan"),
+            "O-IC": float("nan"),
+            "O-ICIR": float("nan"),
+            "O-RankIC": float("nan"),
+            "O-RankICIR": float("nan"),
+            "O-HybridICIR": float("nan"),
+        }
+        return metric, {"pearson_direction": 1, "rank_ic_direction": 1, "direction_consistent": True}
+
+    @staticmethod
+    def _direction_from_insample(series: pd.Series) -> int:
+        mean_value = _safe_float(series.mean()) if len(series) else float("nan")
+        return -1 if pd.notna(mean_value) and mean_value < 0 else 1
+
+    @staticmethod
+    def _summarize_ic(series: pd.Series) -> tuple[float, float]:
+        if not len(series):
+            return float("nan"), float("nan")
+        mean_value = _safe_float(series.mean())
+        std_value = _safe_float(series.std())
+        if pd.isna(mean_value):
+            return float("nan"), float("nan")
+        if pd.isna(std_value) or std_value == 0.0:
+            return mean_value, float("nan")
+        return mean_value, mean_value / std_value
+
+    @staticmethod
+    def _round_metric(value: float) -> float:
+        return round(float(value), 5) if pd.notna(value) else float("nan")
+
+    @staticmethod
+    def _min_metric(left: float, right: float) -> float:
+        if pd.notna(left) and pd.notna(right):
+            return min(float(left), float(right))
+        return float("nan")
+
+    def _calc_metric_bundle(self, factor_series: pd.Series) -> tuple[dict[str, float], dict[str, Any]]:
         if factor_series.isna().all():
-            return {"IC": float("nan"), "ICIR": float("nan"), "O-IC": float("nan"), "O-ICIR": float("nan")}
+            return self._empty_metric_bundle()
 
         insample = (pd.Timestamp(self.insample_time_range[0]), pd.Timestamp(self.insample_time_range[1]))
         outsample = (pd.Timestamp(self.outsample_time_range[0]), pd.Timestamp(self.outsample_time_range[1]))
         insample_factor = factor_series.loc[insample[0]:insample[1], :]
         outsample_factor = factor_series.loc[outsample[0]:outsample[1], :]
 
-        insample_csic = _calc_csic(insample_factor.copy(), self.insample_label_data.copy())
-        outsample_csic = _calc_csic(outsample_factor.copy(), self.outsample_label_data.copy())
-        if len(insample_csic) and _safe_float(insample_csic.mean()) < 0:
-            insample_csic = -insample_csic
-            outsample_csic = -outsample_csic
+        pearson_in = _calc_csic(insample_factor.copy(), self.insample_label_data.copy(), method="pearson")
+        pearson_out = _calc_csic(outsample_factor.copy(), self.outsample_label_data.copy(), method="pearson")
+        rank_in = _calc_csic(insample_factor.copy(), self.insample_label_data.copy(), method="spearman")
+        rank_out = _calc_csic(outsample_factor.copy(), self.outsample_label_data.copy(), method="spearman")
 
-        insample_mean = _safe_float(insample_csic.mean()) if len(insample_csic) else float("nan")
-        insample_std = _safe_float(insample_csic.std()) if len(insample_csic) else float("nan")
-        outsample_mean = _safe_float(outsample_csic.mean()) if len(outsample_csic) else float("nan")
-        outsample_std = _safe_float(outsample_csic.std()) if len(outsample_csic) else float("nan")
-        return {
-            "IC": round(insample_mean, 5) if pd.notna(insample_mean) else float("nan"),
-            "ICIR": round(insample_mean / insample_std, 5) if insample_std not in (0.0, float("nan")) and pd.notna(insample_std) else float("nan"),
-            "O-IC": round(outsample_mean, 5) if pd.notna(outsample_mean) else float("nan"),
-            "O-ICIR": round(outsample_mean / outsample_std, 5) if outsample_std not in (0.0, float("nan")) and pd.notna(outsample_std) else float("nan"),
+        pearson_direction = self._direction_from_insample(pearson_in)
+        rank_ic_direction = self._direction_from_insample(rank_in)
+        pearson_in = pearson_in * pearson_direction
+        pearson_out = pearson_out * pearson_direction
+        rank_in = rank_in * rank_ic_direction
+        rank_out = rank_out * rank_ic_direction
+
+        ic, icir = self._summarize_ic(pearson_in)
+        o_ic, o_icir = self._summarize_ic(pearson_out)
+        rank_ic, rank_icir = self._summarize_ic(rank_in)
+        o_rank_ic, o_rank_icir = self._summarize_ic(rank_out)
+        hybrid_icir = self._min_metric(icir, rank_icir)
+        o_hybrid_icir = self._min_metric(o_icir, o_rank_icir)
+
+        metric = {
+            "IC": self._round_metric(ic),
+            "ICIR": self._round_metric(icir),
+            "RankIC": self._round_metric(rank_ic),
+            "RankICIR": self._round_metric(rank_icir),
+            "HybridICIR": self._round_metric(hybrid_icir),
+            "O-IC": self._round_metric(o_ic),
+            "O-ICIR": self._round_metric(o_icir),
+            "O-RankIC": self._round_metric(o_rank_ic),
+            "O-RankICIR": self._round_metric(o_rank_icir),
+            "O-HybridICIR": self._round_metric(o_hybrid_icir),
         }
+        meta = {
+            "pearson_direction": pearson_direction,
+            "rank_ic_direction": rank_ic_direction,
+            "direction_consistent": pearson_direction == rank_ic_direction,
+        }
+        return metric, meta
+
+    def calc_metric(self, factor_series: pd.Series) -> dict[str, float]:
+        metric, _ = self._calc_metric_bundle(factor_series)
+        return metric
 
     def backtest(self, factor_code: str, factor_args: dict[str, Any], *, entry_function: str | None = None) -> dict[str, Any]:
         factor_series = self.calc(factor_code, factor_args, entry_function=entry_function).rename("factor")
-        metric_dict = self.calc_metric(factor_series)
+        metric_dict, metric_meta = self._calc_metric_bundle(factor_series)
         value = pd.Series(dtype="float32")
         available_symbols = factor_series.unstack().columns.tolist() if len(factor_series) else []
         demo_symbol = self.demo_symbol if self.demo_symbol in available_symbols else (available_symbols[0] if available_symbols else "")
@@ -544,6 +659,10 @@ class LightweightFactorEvaluator:
         return {
             "factor_series": factor_series,
             "metric": metric_dict,
+            "pearson_direction": metric_meta["pearson_direction"],
+            "rank_ic_direction": metric_meta["rank_ic_direction"],
+            "direction_consistent": metric_meta["direction_consistent"],
+            "evaluation_mode": self.evaluation_mode,
             "insample_time_range": [str(self.insample_time_range[0]), str(self.insample_time_range[1])],
             "outsample_time_range": [str(self.outsample_time_range[0]), str(self.outsample_time_range[1])],
             "demo_symbol": demo_symbol,
@@ -571,6 +690,10 @@ def complete_factor(
         "arguments": args,
         "value": res_dict["value"],
         "metric": res_dict["metric"],
+        "pearson_direction": res_dict.get("pearson_direction", 1),
+        "rank_ic_direction": res_dict.get("rank_ic_direction", 1),
+        "direction_consistent": res_dict.get("direction_consistent", True),
+        "evaluation_mode": res_dict.get("evaluation_mode", evaluator.evaluation_mode),
         "insample_time_range": res_dict["insample_time_range"],
         "outsample_time_range": res_dict["outsample_time_range"],
     }

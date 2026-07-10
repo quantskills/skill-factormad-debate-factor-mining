@@ -18,6 +18,10 @@ from typing import Any
 
 import pandas as pd
 
+from factormad_runtime.factormad_compute_runtime import (
+    default_key_metric_for_evaluation_mode,
+    normalize_evaluation_mode,
+)
 from factormad_runtime.factormad_debate_runtime import run_factormad_debate
 
 
@@ -117,8 +121,14 @@ def _metric_time_ranges(insample_time_range: list[str], outsample_time_range: li
     return {
         "IC": {"sample": "insample", "time_range": insample},
         "ICIR": {"sample": "insample", "time_range": insample},
+        "RankIC": {"sample": "insample", "time_range": insample},
+        "RankICIR": {"sample": "insample", "time_range": insample},
+        "HybridICIR": {"sample": "insample", "time_range": insample},
         "O-IC": {"sample": "outsample", "time_range": outsample},
         "O-ICIR": {"sample": "outsample", "time_range": outsample},
+        "O-RankIC": {"sample": "outsample", "time_range": outsample},
+        "O-RankICIR": {"sample": "outsample", "time_range": outsample},
+        "O-HybridICIR": {"sample": "outsample", "time_range": outsample},
     }
 
 
@@ -146,6 +156,14 @@ def _dry_run(input_data: dict[str, Any], output_dir: Path) -> dict[str, Any]:
     insample = input_data.get("insample_time_range", ["2020-01-01", "2021-12-31"])
     outsample = input_data.get("outsample_time_range", ["2022-01-01", "2022-12-31"])
     metric_ranges = _metric_time_ranges(insample, outsample)
+    evaluation_mode = normalize_evaluation_mode(
+        input_data.get("evaluation_mode"),
+        legacy_key_metric=input_data.get("key_metric"),
+    )
+    key_metric = default_key_metric_for_evaluation_mode(evaluation_mode)
+    legacy_threshold = float(input_data.get("factor_metric_threshold", 0.2))
+    icir_threshold = float(input_data.get("icir_threshold", legacy_threshold))
+    rank_icir_threshold = float(input_data.get("rank_icir_threshold", legacy_threshold))
     factor_code = (
         "def dry_run_close_to_vwap_gap(data, window=5):\n"
         "    eps = 1e-8\n"
@@ -159,7 +177,22 @@ def _dry_run(input_data: dict[str, Any], output_dir: Path) -> dict[str, Any]:
         "code": factor_code,
         "entry_function": "dry_run_close_to_vwap_gap",
         "arguments": {"window": 5},
-        "metric": {"IC": 0.0, "ICIR": 0.0, "O-IC": 0.0, "O-ICIR": 0.0},
+        "metric": {
+            "IC": 0.0,
+            "ICIR": 0.0,
+            "RankIC": 0.0,
+            "RankICIR": 0.0,
+            "HybridICIR": 0.0,
+            "O-IC": 0.0,
+            "O-ICIR": 0.0,
+            "O-RankIC": 0.0,
+            "O-RankICIR": 0.0,
+            "O-HybridICIR": 0.0,
+        },
+        "pearson_direction": 1,
+        "rank_ic_direction": 1,
+        "direction_consistent": True,
+        "evaluation_mode": evaluation_mode,
         "insample_time_range": metric_ranges["IC"]["time_range"],
         "outsample_time_range": metric_ranges["O-IC"]["time_range"],
         "status": "dry_run",
@@ -193,6 +226,10 @@ def _dry_run(input_data: dict[str, Any], output_dir: Path) -> dict[str, Any]:
         "insample_time_range": best_factor["insample_time_range"],
         "outsample_time_range": best_factor["outsample_time_range"],
         "metric_time_ranges": metric_ranges,
+        "evaluation_mode": evaluation_mode,
+        "key_metric": key_metric,
+        "icir_threshold": icir_threshold,
+        "rank_icir_threshold": rank_icir_threshold,
         "debate_rounds_path": rounds_path,
         "accepted_factors_path": accepted_path,
     }

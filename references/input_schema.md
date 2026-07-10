@@ -10,7 +10,7 @@ The CLI accepts a JSON object through `--input`.
 
 - `dry_run`: Boolean. When true, validate paths and output contracts without calling an LLM.
 - `output_dir`: Optional output directory used when `--output` is not passed. Relative paths are resolved from the repository root.
-- `insample_time_range`: Two-date list used for lightweight IC/ICIR evaluation.
+- `insample_time_range`: Two-date list used for lightweight Pearson IC, RankIC, and ICIR-style evaluation.
 - `outsample_time_range`: Two-date list recorded for later validation context.
 - `test_debug_range`: Two-date list used by factor code debug checks; defaults to `insample_time_range`. Legacy `test_range` is still accepted for compatibility.
 - `test_symbols`: Symbol list for factor debugging checks; defaults to all symbols in the CSV.
@@ -23,10 +23,13 @@ The CLI accepts a JSON object through `--input`.
 - `debate_max_rounds`: Maximum debate turns.
 - `debate_max_tokens`: Maximum conversation token budget per debate pair.
 - `agent_few_shots`: Number of seed factors sampled per agent.
-- `seed_metric_threshold`: Early-stop threshold for seed-generated factor quality.
-- `factor_metric_threshold`: Acceptance threshold for generated factors.
+- `seed_metric_threshold`: Early-stop threshold under the primary metric implied by `evaluation_mode`.
+- `factor_metric_threshold`: Legacy fallback threshold used when `icir_threshold` or `rank_icir_threshold` is not set.
+- `icir_threshold`: Pearson ICIR acceptance threshold for `pearson_ic` and `hybrid`.
+- `rank_icir_threshold`: RankICIR acceptance threshold for `rank_ic` and `hybrid`.
 - `factor_correlation_threshold`: Similarity threshold against accepted factors.
-- `key_metric`: Metric key used for ranking, normally `ICIR`.
+- `evaluation_mode`: One of `pearson_ic`, `rank_ic`, or `hybrid`. `pearson_ic` ranks and filters by Pearson `ICIR`; `rank_ic` ranks and filters by `RankICIR`; `hybrid` requires both thresholds to pass and requires the Pearson/RankIC in-sample direction signs to agree.
+- `key_metric`: Legacy compatibility field. If `evaluation_mode` is absent, `ICIR` maps to `pearson_ic`, `RankICIR` maps to `rank_ic`, and `HybridICIR` maps to `hybrid`. New configs should prefer `evaluation_mode`.
 - `use_factormad_alpha_library`: Whether to read and update a reusable local factor library. The public example keeps this false so dry-run does not mutate the sample library.
 - `few_shot_from_library`: Whether evaluated library factors are added to the agent few-shot pool.
 - `factormad_alpha_library_path`: Optional library JSON path. Prefer this over the legacy `alpha_library_path` alias.

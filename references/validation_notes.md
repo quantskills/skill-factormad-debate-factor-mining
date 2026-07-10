@@ -24,7 +24,7 @@ Generated factor code is checked for:
 ## Limitations
 
 - LLM-generated code can still contain subtle logic errors.
-- Lightweight IC/ICIR can overfit and is not a production validation.
+- Lightweight Pearson IC, RankIC, and ICIR-style metrics can overfit and is not a production validation.
 - The included toy data and dry-run mode validate mechanics, not factor quality.
 - Final evaluation should include out-of-sample testing, transaction costs, turnover, risk exposure, and portfolio-level backtests.
 

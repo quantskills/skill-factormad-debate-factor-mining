@@ -31,9 +31,10 @@
   "debate_max_tokens": 32768,
   "agent_few_shots": 3,
   "seed_metric_threshold": 0.3,
-  "factor_metric_threshold": 0.05,
+  "icir_threshold": 0.05,
+  "rank_icir_threshold": 0.05,
+  "evaluation_mode": "pearson_ic",
   "factor_correlation_threshold": 0.8,
-  "key_metric": "ICIR",
   "use_factormad_alpha_library": false,
   "few_shot_from_library": false,
   "factormad_alpha_library_path": "examples/factormad_alpha_library/library.json"

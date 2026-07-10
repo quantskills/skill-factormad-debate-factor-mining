@@ -35,7 +35,7 @@ python scripts/factormad_debate_factor.py --input examples/debate_input.json
 ```
 
 4. Read `references/output_contract.md` before consuming generated artifacts.
-5. Treat lightweight IC/ICIR as internal selection evidence only; run independent out-of-sample and portfolio validation before using any factor downstream.
+5. Treat lightweight Pearson IC, RankIC, and ICIR-style metrics as internal selection evidence only; run independent out-of-sample and portfolio validation before using any factor downstream.
 
 ## Output Contract
 

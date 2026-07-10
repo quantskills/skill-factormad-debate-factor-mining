@@ -89,4 +89,4 @@ accepted_factors.json
 
 ## 边界说明
 
-本 Skill 仅用于量化研究自动化。生成的因子和 IC/ICIR 指标不是投资建议、收益承诺或生产交易验证。
+本 Skill 仅用于量化研究自动化。生成的因子和 Pearson IC、RankIC 和 ICIR 类指标不是投资建议、收益承诺或生产交易验证。

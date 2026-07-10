@@ -28,7 +28,7 @@
 
 `skill-factormad-debate-factor-mining` 是一个自包含的 QUANTSKILLS 社区 Skill。它参考 FactorMAD 论文中的核心思想：让两个 LLM Agent 围绕候选因子进行结构化辩论、批评、修正，并把候选因子输出为可执行 Python 函数，而不是限制在预定义算子集合里。
 
-本仓库提供的是一套研究工作流：从 OHLCV 行情数据出发，生成候选因子代码，做基础代码检查和轻量 IC/ICIR 评估，然后输出可审计 JSON 产物。
+本仓库提供的是一套研究工作流：从 OHLCV 行情数据出发，生成候选因子代码，做基础代码检查和轻量 Pearson IC、RankIC 与 ICIR 类评估，然后输出可审计 JSON 产物。
 
 ## 这个 Skill 解决什么问题
 
@@ -38,14 +38,14 @@
 - **LLM 一次性生成后无人批评**：缺少反方视角和迭代修正
 - **代码能生成但不能跑**：NaN、inf、索引错位、零成交量、未来函数等问题没有被检查
 - **结果不可追溯**：不知道每轮候选因子、辩论意见、筛选结果和最佳因子来自哪里
-- **轻量指标被误用成最终回测**：IC/ICIR 只能做内部筛选，不能替代组合级验证
+- **轻量指标被误用成最终回测**：Pearson IC、RankIC 与 ICIR 类指标只能做内部筛选，不能替代组合级验证
 
 本 Skill 会提供：
 
 - FactorMAD 风格的双 Agent 辩论流程
 - 代码型因子生成，输出 Python function + arguments
 - 基础 factor code debug / validation 检查
-- 轻量 IC/ICIR 候选筛选
+- 轻量 Pearson IC、RankIC 与 ICIR 类候选筛选
 - 时间戳输出目录，保留每次运行的审计产物
 - `dry_run` 模式，不调用 LLM 也能验证安装和输出
 
@@ -56,7 +56,7 @@
 2. 准备 input JSON，默认示例已使用 dry_run=true 做机械验证
 3. 真实运行时复制示例配置，通过 `.env` 或 shell 环境变量设置 API key，并将 dry_run 改为 false
 4. 两个 LLM Agent 生成、批评、修正候选因子
-5. runtime 检查候选因子代码并计算轻量 IC/ICIR
+5. runtime 检查候选因子代码并计算轻量 Pearson IC、RankIC 与 ICIR 类指标
 6. 输出 debate 记录、accepted factors 和 best factor
 7. 后续用独立流程做样本外、交易成本、风险暴露和组合级回测
 ```
@@ -254,10 +254,13 @@ python scripts/factormad_debate_factor.py \
 | `debate_jobs` | integer | 独立 debate job 数量。首次真实运行建议设为 `1` |
 | `debate_max_rounds` | integer | 每个 job 最多 debate 轮数 |
 | `debate_max_tokens` | integer | 每组 Agent 对话的 token 上限 |
-| `seed_metric_threshold` | number | 初始因子达到该阈值时可提前停止 |
-| `factor_metric_threshold` | number | 新因子进入 accepted set 的指标阈值 |
+| `seed_metric_threshold` | number | 初始因子达到当前评价模式主指标阈值时可提前停止 |
+| `factor_metric_threshold` | number | 旧字段，作为 `icir_threshold` 和 `rank_icir_threshold` 未设置时的兼容默认值 |
+| `icir_threshold` | number | Pearson ICIR 通过阈值，`pearson_ic` 与 `hybrid` 模式使用 |
+| `rank_icir_threshold` | number | RankICIR 通过阈值，`rank_ic` 与 `hybrid` 模式使用 |
 | `factor_correlation_threshold` | number | 与已接受因子的相关性阈值，超过后会被视为相似 |
-| `key_metric` | string | 排序和筛选主指标，通常使用 `ICIR` |
+| `evaluation_mode` | string | 评价模式：`pearson_ic` 使用 Pearson ICIR；`rank_ic` 使用 RankICIR；`hybrid` 要求两者分别达标且方向一致 |
+| `key_metric` | string | 旧字段，仅当未设置 `evaluation_mode` 时用于兼容推断；新配置不建议直接设置 |
 
 首次真实运行建议保守设置：
 
@@ -266,11 +269,13 @@ python scripts/factormad_debate_factor.py \
   "debate_jobs": 1,
   "debate_max_rounds": 2,
   "agent_few_shots": 3,
-  "key_metric": "ICIR"
+  "evaluation_mode": "pearson_ic",
+  "icir_threshold": 0.05,
+  "rank_icir_threshold": 0.05
 }
 ```
 
-确认流程稳定后，再逐步增加 `debate_jobs` 和 `debate_max_rounds`。
+确认流程稳定后，再逐步增加 `debate_jobs` 和 `debate_max_rounds`。`evaluation_mode` 会自动映射内部排序指标：`pearson_ic` 对应 `ICIR`，`rank_ic` 对应 `RankICIR`，`hybrid` 对应 `HybridICIR`。`hybrid` 不是加权分数，而是要求 Pearson ICIR 和 RankICIR 分别达标，并且两个指标根据样本内均值判断出的方向一致。
 
 ### 因子库变量
 
@@ -350,7 +355,10 @@ outputs/debate_example/
 | `generated_factors` | 所有 job 生成的候选因子，包含 effective、similar 和 invalid 候选 |
 | `accepted_factors` | 当前 accepted set，包含评估通过的 seed / library 因子，以及新增 effective 因子 |
 | `invalid_factors` | 未通过检查或与已有因子过于相似的候选 |
-| `best_factor` | 在 `generated_factors` 中按 `key_metric` 排序后的最佳候选；不等同于最终可交易因子 |
+| `evaluation_mode` | 本次运行的评价模式：`pearson_ic`、`rank_ic` 或 `hybrid` |
+| `key_metric` | 由 `evaluation_mode` 自动映射出的内部排序指标：`ICIR`、`RankICIR` 或 `HybridICIR` |
+| `icir_threshold` / `rank_icir_threshold` | 进入 accepted set 时分别使用的 Pearson ICIR 与 RankICIR 阈值 |
+| `best_factor` | 在 `generated_factors` 中按 `evaluation_mode` 对应内部指标排序后的最佳候选；不等同于最终可交易因子 |
 | `metric_time_ranges` | 指标对应的样本区间说明 |
 | `library_update` | 启用因子库时的写入统计 |
 | `llm_fee` | runtime 估算的 LLM 调用费用 |
@@ -363,7 +371,11 @@ outputs/debate_example/
 | `code` | 可执行 Python 因子函数代码 |
 | `entry_function` | 入口函数名 |
 | `arguments` | 调用因子函数时使用的参数 |
-| `metric` | `IC`、`ICIR`、`O-IC`、`O-ICIR` 指标 |
+| `metric` | `IC`、`ICIR`、`RankIC`、`RankICIR`、`HybridICIR`、`O-IC`、`O-ICIR`、`O-RankIC`、`O-RankICIR`、`O-HybridICIR` 指标 |
+| `evaluation_mode` | 该因子使用的评价模式 |
+| `pearson_direction` | Pearson IC 根据样本内均值确定的方向，取值为 `1` 或 `-1` |
+| `rank_ic_direction` | RankIC 根据样本内均值确定的方向，取值为 `1` 或 `-1` |
+| `direction_consistent` | Pearson IC 与 RankIC 的样本内方向是否一致，`hybrid` 模式必须为 `true` 才能通过 |
 | `insample_time_range` | 样本内区间 |
 | `outsample_time_range` | 样本外区间 |
 | `status` | `effective`、`similar`、`invalid`、`dry_run` 等状态 |
@@ -394,7 +406,7 @@ outputs/debate_example/
 - **项目状态**：Community Project，未经 QUANTSKILLS 官方审核、认证或背书
 - **平台**：仅支持 Codex（`platforms: [codex]`）
 - **数据来源**：本仓库只包含 toy data；真实数据由使用者自行提供，并由使用者负责数据许可与合规
-- **核心假设**：日频 OHLCV 截面因子研究；轻量 IC/ICIR 用作候选筛选
+- **核心假设**：日频 OHLCV 截面因子研究；轻量 Pearson IC、RankIC 与 ICIR 类指标用作候选筛选
 - **已知限制**：不模拟交易成本、市场冲击、停牌流动性、行业/风格暴露、组合约束或真实成交细节
 - **风险边界**：历史统计表现不代表未来表现；LLM 生成代码必须人工审查和独立验证
 - **用途**：仅供量化研究、教育和方法论参考，不构成投资建议、交易信号或获利保证

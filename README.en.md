@@ -27,7 +27,7 @@ This is not a factor library or a backtest engine. It is a **FactorMAD-style LLM
 
 `skill-factormad-debate-factor-mining` is a self-contained QUANTSKILLS community skill. It follows the core idea of the FactorMAD paper: two LLM agents debate, critique, and revise candidate factors, then export candidates as executable Python functions instead of restricting factor discovery to a predefined operator set.
 
-This repository provides a research workflow that starts from OHLCV market data, generates candidate factor code, performs basic code validation and lightweight IC/ICIR evaluation, then writes auditable JSON artifacts.
+This repository provides a research workflow that starts from OHLCV market data, generates candidate factor code, performs basic code validation and lightweight Pearson IC, RankIC, and ICIR-style evaluation, then writes auditable JSON artifacts.
 
 ## What Problem This Skill Solves
 
@@ -37,14 +37,14 @@ Common failure modes in automated factor mining include:
 - **One-shot LLM generation without critique**: there is no opposing view or iterative repair.
 - **Generated code cannot run**: NaN, inf, index misalignment, zero volume, and look-ahead risks are not checked.
 - **Results are not auditable**: users cannot trace each candidate, debate view, filtering result, and best factor.
-- **Lightweight metrics are overused**: IC/ICIR are internal screening signals, not portfolio-level validation.
+- **Lightweight metrics are overused**: Pearson IC, RankIC, and ICIR-style metrics are internal screening signals, not portfolio-level validation.
 
 This skill provides:
 
 - a FactorMAD-style two-agent debate workflow;
 - code-based factor generation that exports a Python function plus arguments;
 - basic factor-code debug and validation checks;
-- lightweight IC/ICIR candidate screening;
+- lightweight Pearson IC, RankIC, and ICIR-style candidate screening;
 - timestamped output directories for auditable run artifacts;
 - `dry_run` mode to validate installation and output contracts without calling an LLM.
 
@@ -55,7 +55,7 @@ This skill provides:
 2. Prepare an input JSON. The public example uses dry_run=true for mechanical validation.
 3. For real runs, copy the example config, configure API credentials through .env or shell variables, and set dry_run=false.
 4. Two LLM agents generate, critique, and revise candidate factors.
-5. The runtime validates candidate factor code and computes lightweight IC/ICIR metrics.
+5. The runtime validates candidate factor code and computes lightweight Pearson IC, RankIC, and ICIR-style metrics.
 6. The CLI writes debate records, accepted factors, and the best generated factor.
 7. Use independent workflows for out-of-sample checks, costs, risk exposure, and portfolio-level backtests.
 ```
@@ -253,10 +253,13 @@ If `examples` and seed files are empty, the runtime uses built-in default seed f
 | `debate_jobs` | integer | Number of independent debate jobs. Use `1` for first real runs. |
 | `debate_max_rounds` | integer | Maximum debate turns per job. |
 | `debate_max_tokens` | integer | Token budget per agent-pair conversation. |
-| `seed_metric_threshold` | number | Early-stop threshold for seed-generated factor quality. |
-| `factor_metric_threshold` | number | Metric threshold for admitting new factors to the accepted set. |
+| `seed_metric_threshold` | number | Early-stop threshold under the primary metric implied by `evaluation_mode`. |
+| `factor_metric_threshold` | number | Legacy fallback used when `icir_threshold` or `rank_icir_threshold` is not set. |
+| `icir_threshold` | number | Pearson ICIR acceptance threshold used by `pearson_ic` and `hybrid`. |
+| `rank_icir_threshold` | number | RankICIR acceptance threshold used by `rank_ic` and `hybrid`. |
 | `factor_correlation_threshold` | number | Similarity threshold against already accepted factors. Higher similarity is marked `similar`. |
-| `key_metric` | string | Primary ranking and filtering metric, usually `ICIR`. |
+| `evaluation_mode` | string | Evaluation mode: `pearson_ic` uses Pearson ICIR; `rank_ic` uses RankICIR; `hybrid` requires both metrics to pass and their directions to agree. |
+| `key_metric` | string | Legacy compatibility field used only to infer `evaluation_mode` when it is absent; new configs should not set it directly. |
 
 Recommended first real-run settings:
 
@@ -265,11 +268,13 @@ Recommended first real-run settings:
   "debate_jobs": 1,
   "debate_max_rounds": 2,
   "agent_few_shots": 3,
-  "key_metric": "ICIR"
+  "evaluation_mode": "pearson_ic",
+  "icir_threshold": 0.05,
+  "rank_icir_threshold": 0.05
 }
 ```
 
-After the flow is stable, increase `debate_jobs` and `debate_max_rounds` gradually.
+After the flow is stable, increase `debate_jobs` and `debate_max_rounds` gradually. `evaluation_mode` maps to an internal ranking metric automatically: `pearson_ic` uses `ICIR`, `rank_ic` uses `RankICIR`, and `hybrid` uses `HybridICIR`. `hybrid` is not a weighted score; Pearson ICIR and RankICIR must each pass their own threshold, and their in-sample direction signs must agree.
 
 ### Factor Library Variables
 
@@ -347,7 +352,10 @@ Main result fields:
 | `generated_factors` | All factors generated by debate jobs, including effective, similar, and invalid candidates. |
 | `accepted_factors` | Current accepted set, including evaluated seed/library factors and newly generated effective factors. |
 | `invalid_factors` | Rejected candidates or near-duplicates. |
-| `best_factor` | Best candidate from `generated_factors` ranked by `key_metric`; not a final tradable factor. |
+| `evaluation_mode` | Run-level evaluation mode: `pearson_ic`, `rank_ic`, or `hybrid`. |
+| `key_metric` | Internal ranking metric automatically mapped from `evaluation_mode`: `ICIR`, `RankICIR`, or `HybridICIR`. |
+| `icir_threshold` / `rank_icir_threshold` | Pearson ICIR and RankICIR thresholds used for accepted-set admission. |
+| `best_factor` | Best candidate from `generated_factors` ranked by the internal metric implied by `evaluation_mode`; not a final tradable factor. |
 | `metric_time_ranges` | Run-level mapping from metrics to sample windows. |
 | `library_update` | Library write statistics when the factor library is enabled. |
 | `llm_fee` | Runtime-estimated LLM call fee. |
@@ -360,7 +368,11 @@ Each factor record uses canonical fields:
 | `code` | Executable Python factor function code. |
 | `entry_function` | Entry function name. |
 | `arguments` | Arguments used when calling the factor function. |
-| `metric` | `IC`, `ICIR`, `O-IC`, and `O-ICIR`. |
+| `metric` | `IC`, `ICIR`, `RankIC`, `RankICIR`, `HybridICIR`, `O-IC`, `O-ICIR`, `O-RankIC`, `O-RankICIR`, and `O-HybridICIR`. |
+| `evaluation_mode` | Evaluation mode used for this factor. |
+| `pearson_direction` | Direction inferred from the in-sample Pearson IC mean, either `1` or `-1`. |
+| `rank_ic_direction` | Direction inferred from the in-sample RankIC mean, either `1` or `-1`. |
+| `direction_consistent` | Whether Pearson IC and RankIC in-sample directions agree; `hybrid` mode requires this to be `true`. |
 | `insample_time_range` | In-sample evaluation range. |
 | `outsample_time_range` | Out-of-sample evaluation range. |
 | `status` | `effective`, `similar`, `invalid`, `dry_run`, and related statuses. |
@@ -399,7 +411,7 @@ debate-factor-mining -> factor-debugging -> compute alpha -> evaluate / backtest
 - **Project status**: Community Project, not officially reviewed, certified, or endorsed by QUANTSKILLS.
 - **Platform**: Codex only (`platforms: [codex]`).
 - **Data source**: This repository includes toy data only. Real data is user-provided, and users are responsible for data licensing and compliance.
-- **Core assumption**: Daily OHLCV cross-sectional factor research. Lightweight IC/ICIR is used for candidate screening.
+- **Core assumption**: Daily OHLCV cross-sectional factor research. Lightweight Pearson IC, RankIC, and ICIR-style metrics are used for candidate screening.
 - **Known limitations**: No transaction costs, market impact, suspension/liquidity modeling, industry/style exposure control, portfolio constraints, or real execution modeling.
 - **Risk boundary**: Historical statistics do not imply future performance. LLM-generated code requires human review and independent validation.
 - **Use**: For quantitative research, education, and methodology reference only. Not investment advice, trading signals, or profit assurance.

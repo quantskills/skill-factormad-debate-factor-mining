@@ -24,19 +24,26 @@ The main result includes:
 - `accepted_count`: Number of accepted factors.
 - `invalid_count`: Number of rejected or invalid factors.
 - `llm_fee`: Estimated LLM fee for the run.
-- `best_factor`: Best candidate under the configured lightweight metric.
+- `evaluation_mode`: Evaluation mode used by this run: `pearson_ic`, `rank_ic`, or `hybrid`.
+- `key_metric`: Internal ranking metric implied by `evaluation_mode` (`ICIR`, `RankICIR`, or `HybridICIR`).
+- `icir_threshold` and `rank_icir_threshold`: Acceptance thresholds applied to generated factors.
+- `best_factor`: Best candidate under the internal ranking metric implied by `evaluation_mode`.
 - `generated_factors`: Candidate factors generated during debate.
 - `accepted_factors`: Accepted factors after metric and similarity checks.
 - `invalid_factors`: Rejected factors or near-duplicates.
 - `debate_rounds`: Per-round records with agent view text, candidate factor, status, and error, also written to `debate_rounds.json`.
-- `metric_time_ranges`: Run-level metric labels: `IC` and `ICIR` use `insample_time_range`; `O-IC` and `O-ICIR` use `outsample_time_range`.
+- `metric_time_ranges`: Run-level metric labels. `IC`, `ICIR`, `RankIC`, `RankICIR`, and `HybridICIR` use `insample_time_range`; `O-IC`, `O-ICIR`, `O-RankIC`, `O-RankICIR`, and `O-HybridICIR` use `outsample_time_range`.
 - `debate_json_path`, `debate_rounds_path`, `accepted_factors_path`: Artifact paths.
 
 Every factor record in `best_factor`, `generated_factors`, `accepted_factors`, and `invalid_factors` uses the same canonical field names:
 
 - `code`: Python function code for the factor.
 - `arguments`: Arguments for the factor function.
-- `metric`: Numeric values for `IC`, `ICIR`, `O-IC`, and `O-ICIR`.
+- `metric`: Numeric values for `IC`, `ICIR`, `RankIC`, `RankICIR`, `HybridICIR`, `O-IC`, `O-ICIR`, `O-RankIC`, `O-RankICIR`, and `O-HybridICIR`.
+- `evaluation_mode`: Evaluation mode used when the factor was evaluated.
+- `pearson_direction`: Direction inferred from the in-sample Pearson IC mean, either `1` or `-1`.
+- `rank_ic_direction`: Direction inferred from the in-sample RankIC mean, either `1` or `-1`.
+- `direction_consistent`: Whether Pearson IC and RankIC in-sample directions agree. `hybrid` mode requires this to be true.
 - `insample_time_range` and `outsample_time_range`: The two evaluation windows retained on each factor record. Per-metric time-range labels are kept only at the run level.
 
 Legacy inputs using `factor_code`, `factor_arguments`, `best_factor_code`, `best_factor_arguments`, `best_metric`, or `round_records` are still accepted for compatibility, but new outputs use the canonical fields above.

@@ -74,6 +74,10 @@ def normalize_library_factor(factor: dict[str, Any]) -> dict[str, Any] | None:
         "outsample_time_range",
         "market_data_csv_path",
         "label_config",
+        "evaluation_mode",
+        "pearson_direction",
+        "rank_ic_direction",
+        "direction_consistent",
     ):
         if key in factor:
             normalized[key] = factor[key]
@@ -131,7 +135,7 @@ def save_factormad_library(path: str | Path | None, factors: list[dict[str, Any]
     normalized = _dedupe_factors(normalized, key_metric=key_metric)
     normalized = sorted(
         normalized,
-        key=lambda item: item.get("metric", {}).get(key_metric, float("-inf")),
+        key=lambda item: _metric_value(item, key_metric),
         reverse=True,
     )
     library_path.write_text(json.dumps(normalized, ensure_ascii=False, indent=2, default=str) + "\n", encoding="utf-8")
