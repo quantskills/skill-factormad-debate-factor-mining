@@ -20,6 +20,36 @@ quantSkills:
   summary_en: Mine interpretable code-based stock alpha factors from OHLCV market data with a FactorMAD-style LLM debate workflow.
 ---
 
+```json qsh-form
+{
+  "version": 1,
+  "task": {
+    "placeholder": "说明 OHLCV 数据、候选因子约束和实验目标；请上传或指明输入文件",
+    "required": true
+  },
+  "fields": [
+    {
+      "key": "run_mode",
+      "label": "运行模式",
+      "type": "select",
+      "default": "dry_run",
+      "help": "建议先预检安装、路径和产物，再进行真实辩论",
+      "options": [
+        { "value": "dry_run", "label": "预检（不调用 LLM）" },
+        { "value": "debate", "label": "真实多智能体辩论" }
+      ]
+    },
+    {
+      "key": "focus",
+      "label": "挖掘关注点",
+      "type": "textarea",
+      "placeholder": "例如：量价背离、短期反转、可解释性或低换手"
+    }
+  ],
+  "prompt_template": "{{#task}}任务与材料：\n{{task}}\n\n{{/task}}{{#attachments}}用户上传的材料（已放入工作区）：\n{{attachments}}\n\n{{/attachments}}按 FactorMAD 工作流以 {{run_mode}} 模式处理用户提供的 OHLCV 数据，{{#focus}}重点关注：{{focus}}；{{/focus}}组织多智能体提出、批判、校验、评分并导出可解释的 Python 股票 Alpha 候选代码，保留辩论轮次与接受因子产物，并明确内部 IC 证据不能替代独立样本外和组合验证，输出中文报告。"
+}
+```
+
 # FactorMAD Debate Factor Mining
 
 Use this skill to run a FactorMAD-style multi-agent debate workflow that proposes, critiques, validates, scores, and exports Python code-based stock alpha factor candidates.
