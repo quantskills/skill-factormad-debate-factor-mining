@@ -13,16 +13,15 @@ import pandas as pd
 
 from .factormad_compute_runtime import (
     DEFAULT_EXAMPLES,
-    DEFAULT_FACTOR_REQUIREMENT,
     LightweightFactorEvaluator,
     SkillChatClient,
     compact_factor_info,
     complete_factor,
     default_key_metric_for_evaluation_mode,
     hash_str,
-    load_factormad_market_data,
     normalize_evaluation_mode,
     parse_json,
+    prepare_factormad_market_data,
     resolve_llm_name,
     write_factormad_json,
 )
@@ -32,6 +31,7 @@ from .factormad_alpha_library import (
     load_factormad_library,
     resolve_factormad_library_path,
 )
+from .factormad_feature_catalog import build_factor_requirement
 
 
 def _to_bool(value: Any, default: bool = False) -> bool:
@@ -573,12 +573,9 @@ def run_agent_debate(
 
 def run_factormad_debate(input_data: dict[str, Any]) -> dict[str, Any]:
     show_progress = True
-    market_data_csv_path = str(input_data.get("market_data_csv_path", "")).strip()
-    if not market_data_csv_path:
-        raise ValueError("market_data_csv_path is required.")
-
-    _progress(show_progress, f"loading market data: {market_data_csv_path}")
-    raw_data = load_factormad_market_data(market_data_csv_path)
+    _progress(show_progress, "inspecting market data and feature catalog")
+    raw_data, feature_catalog, market_data_summary = prepare_factormad_market_data(input_data)
+    market_data_path = market_data_summary["path"]
     _progress(
         show_progress,
         "market data loaded: "
@@ -595,7 +592,7 @@ def run_factormad_debate(input_data: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(test_symbols, list) or not test_symbols:
         test_symbols = raw_data.index.get_level_values("symbol").unique().tolist()
 
-    factor_requirement = str(input_data.get("factor_requirement", DEFAULT_FACTOR_REQUIREMENT)).strip() or DEFAULT_FACTOR_REQUIREMENT
+    factor_requirement = build_factor_requirement(input_data, feature_catalog)
     examples = _load_seed_examples(input_data)
     llm_name = resolve_llm_name(input_data)
     agent_few_shots = int(input_data.get("agent_few_shots", 3) or 3)
@@ -613,12 +610,28 @@ def run_factormad_debate(input_data: dict[str, Any]) -> dict[str, Any]:
     key_metric = default_key_metric_for_evaluation_mode(evaluation_mode)
     debate_jobs = max(1, int(input_data.get("debate_jobs", 1) or 1))
     use_alpha_library = _to_bool(input_data.get("use_factormad_alpha_library"), default=False)
-    few_shot_from_library = _to_bool(input_data.get("few_shot_from_library"), default=use_alpha_library)
+    few_shot_from_library = _to_bool(
+        input_data.get("few_shot_from_library"),
+        default=use_alpha_library or bool(input_data.get("few_shot_library_paths")),
+    )
     alpha_library_path = str(
         input_data.get("factormad_alpha_library_path")
         or input_data.get("alpha_library_path")
         or resolve_factormad_library_path()
     )
+    configured_read_paths = input_data.get("few_shot_library_paths")
+    if configured_read_paths is not None and not isinstance(configured_read_paths, list):
+        raise ValueError("few_shot_library_paths must be a list of library JSON paths")
+    read_library_paths = [
+        str(path).strip()
+        for path in (configured_read_paths or [])
+        if str(path).strip()
+    ]
+    has_explicit_read_paths = bool(read_library_paths)
+    if not few_shot_from_library and not use_alpha_library:
+        read_library_paths = []
+    if not read_library_paths and (use_alpha_library or few_shot_from_library):
+        read_library_paths = [alpha_library_path]
 
     _progress(
         show_progress,
@@ -640,6 +653,8 @@ def run_factormad_debate(input_data: dict[str, Any]) -> dict[str, Any]:
         label_config=label_config,
         demo_symbol=demo_symbol,
         evaluation_mode=evaluation_mode,
+        feature_catalog=feature_catalog,
+        market_data_input=input_data,
     )
     debugger = FactorMADDebugger(
         evaluator=evaluator,
@@ -648,6 +663,7 @@ def run_factormad_debate(input_data: dict[str, Any]) -> dict[str, Any]:
         factor_requirement=factor_requirement,
         examples=examples,
         llm_name=llm_name,
+        min_factor_nonnull_rate=float(input_data.get("min_factor_nonnull_rate", 0.01)),
     )
 
     seed_factor_infos: list[dict[str, Any]] = []
@@ -670,9 +686,19 @@ def run_factormad_debate(input_data: dict[str, Any]) -> dict[str, Any]:
 
     library_factor_infos: list[dict[str, Any]] = []
     library_failures: list[dict[str, Any]] = []
-    if use_alpha_library:
-        library_items = load_factormad_library(alpha_library_path)
-        _progress(show_progress, f"evaluating alpha library: path={alpha_library_path} count={len(library_items)}")
+    if read_library_paths:
+        library_items: list[dict[str, Any]] = []
+        for read_path in read_library_paths:
+            loaded_items = load_factormad_library(
+                read_path,
+                create_if_missing=use_alpha_library and not has_explicit_read_paths,
+            )
+            _progress(show_progress, f"loading few-shot library: path={read_path} count={len(loaded_items)}")
+            for item in loaded_items:
+                item = dict(item)
+                item["_library_path"] = read_path
+                library_items.append(item)
+        _progress(show_progress, f"evaluating few-shot libraries: count={len(library_items)}")
         for item in library_items:
             try:
                 info = complete_factor(
@@ -683,12 +709,27 @@ def run_factormad_debate(input_data: dict[str, Any]) -> dict[str, Any]:
                     name=str(item.get("name") or ""),
                 )
                 if info is not None:
-                    for key in ("source", "created_at", "workflow_run", "debate", "round"):
+                    for key in (
+                        "source",
+                        "created_at",
+                        "workflow_run",
+                        "debate",
+                        "round",
+                        "data_profile",
+                        "factor_mode",
+                        "referenced_fields",
+                        "market_data_manifest_sha256",
+                    ):
                         if key in item and key not in info:
                             info[key] = item[key]
                     library_factor_infos.append(info)
             except Exception as exc:
-                library_failures.append({"name": item.get("name"), "hash": item.get("hash"), "error": str(exc)[:300]})
+                library_failures.append({
+                    "name": item.get("name"),
+                    "hash": item.get("hash"),
+                    "library_path": item.get("_library_path"),
+                    "error": str(exc)[:300],
+                })
         _progress(
             show_progress,
             f"alpha library evaluation finished: usable={len(library_factor_infos)} failed={len(library_failures)}",
@@ -789,8 +830,12 @@ def run_factormad_debate(input_data: dict[str, Any]) -> dict[str, Any]:
         "library_failures": library_failures,
         "seed_factor_count": len(seed_factor_infos),
         "few_shot_from_library": few_shot_from_library,
+        "few_shot_library_paths": read_library_paths,
         "use_factormad_alpha_library": use_alpha_library,
         "factormad_alpha_library_path": alpha_library_path,
+        "market_data_summary": market_data_summary,
+        "feature_catalog": feature_catalog,
+        "factor_requirement": factor_requirement,
     }
 
     if use_alpha_library:
@@ -800,7 +845,11 @@ def run_factormad_debate(input_data: dict[str, Any]) -> dict[str, Any]:
             factors=all_generated_factors,
             key_metric=key_metric,
             metadata={
-                "market_data_csv_path": market_data_csv_path,
+                "market_data_path": market_data_path,
+                "data_profile": feature_catalog.get("data_profile"),
+                "factor_mode": feature_catalog.get("factor_mode"),
+                "market_data_manifest_path": feature_catalog.get("manifest_path"),
+                "market_data_manifest_sha256": feature_catalog.get("manifest_sha256"),
                 "insample_time_range": insample,
                 "outsample_time_range": outsample,
             },

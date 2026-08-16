@@ -10,22 +10,22 @@ import pandas as pd
 
 from .factormad_compute_runtime import (
     DEFAULT_EXAMPLES,
-    DEFAULT_FACTOR_REQUIREMENT,
     LightweightFactorEvaluator,
     SkillChatClient,
     compact_factor_info,
     complete_factor,
     load_factor_payload,
-    load_factormad_market_data,
     parse_error,
     parse_func_name,
     parse_json,
+    prepare_factormad_market_data,
     run_with_timeout,
     select_factors_from_payload,
     shift_date,
     resolve_llm_name,
     write_factormad_json,
 )
+from .factormad_feature_catalog import build_factor_requirement
 
 
 class FactorMADDebugger:
@@ -38,6 +38,7 @@ class FactorMADDebugger:
         examples: list[dict[str, Any]],
         llm_name: str,
         timeout_seconds: int = 30,
+        min_factor_nonnull_rate: float = 0.01,
     ):
         self.evaluator = evaluator
         self.test_range = test_range
@@ -46,6 +47,7 @@ class FactorMADDebugger:
         self.examples = examples
         self.llm_name = llm_name
         self.timeout_seconds = timeout_seconds
+        self.min_factor_nonnull_rate = float(min_factor_nonnull_rate)
 
     def _system_prompt(self) -> str:
         sample_examples = self.examples[:3] if self.examples else []
@@ -78,7 +80,10 @@ class FactorMADDebugger:
             "IMPORT": "Do not import any modules; pandas is available as pd and numpy as np.",
             "LINE": "Please simplify the factor function to reduce code length.",
             "TIME": "Please optimize the factor function to run faster. Avoid Python loops, nested groupby.apply, rolling corr on very large frames, and repeated full-data recalculation.",
-            "KEY": "Please use only allowed data fields: open, high, low, close, vwap, volume, amount.",
+            "KEY": (
+                "Please use only allowed data fields and satisfy factor_mode. "
+                f"Allowed fields: {', '.join(self.evaluator.feature_catalog.get('allowed_fields', []))}."
+            ),
             "OUTPUT": "Please return a pandas Series aligned to the input dataframe index.",
             "NAN": "Please fix all-NaN output, often caused by division by zero, zero volume/amount, rolling std equal to zero, or rolling windows with too few valid values.",
             "FUTURE": "Please remove look-ahead bias. Use rolling/shift only with past values.",
@@ -108,6 +113,15 @@ class FactorMADDebugger:
             return "OTHER", "Error: missing factor code or arguments"
         if not isinstance(args, dict):
             return "OTHER", "Error: factor arguments must be a JSON object"
+
+        _, violations = self.evaluator.analyze_code(
+            code,
+            args,
+            enforce_mode=True,
+        )
+        if violations:
+            first = violations[0]
+            return first["status"], f"Error: {first['message']}"
 
         try:
             _ = parse_func_name(code, entry_function=entry_function)
@@ -140,6 +154,13 @@ class FactorMADDebugger:
             return "OUTPUT", "Error: factor output is not a pandas Series"
         if factor_series.isna().all():
             return "NAN", "Error: all factor values are NaN"
+        nonnull_rate = float(factor_series.notna().mean())
+        if nonnull_rate < self.min_factor_nonnull_rate:
+            return (
+                "NAN",
+                "Error: factor non-null rate "
+                f"{nonnull_rate:.4f} is below {self.min_factor_nonnull_rate:.4f}",
+            )
 
         try:
             test_end = pd.Timestamp(self.test_range[1])
@@ -267,11 +288,7 @@ def _load_input_factors(input_data: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def run_factormad_debug(input_data: dict[str, Any]) -> dict[str, Any]:
-    market_data_csv_path = str(input_data.get("market_data_csv_path", "")).strip()
-    if not market_data_csv_path:
-        raise ValueError("market_data_csv_path is required.")
-
-    raw_data = load_factormad_market_data(market_data_csv_path)
+    raw_data, feature_catalog, market_data_summary = prepare_factormad_market_data(input_data)
     insample = input_data.get("insample_time_range", ["2020-01-01", "2021-12-31"])
     outsample = input_data.get("outsample_time_range", ["2022-01-01", "2022-12-31"])
     test_range = input_data.get("test_debug_range", input_data.get("test_range", insample))
@@ -279,7 +296,7 @@ def run_factormad_debug(input_data: dict[str, Any]) -> dict[str, Any]:
     test_symbols = input_data.get("test_symbols")
     if not isinstance(test_symbols, list) or not test_symbols:
         test_symbols = raw_data.index.get_level_values("symbol").unique().tolist()
-    factor_requirement = str(input_data.get("factor_requirement", DEFAULT_FACTOR_REQUIREMENT)).strip() or DEFAULT_FACTOR_REQUIREMENT
+    factor_requirement = build_factor_requirement(input_data, feature_catalog)
     examples = input_data.get("examples")
     if not isinstance(examples, list) or not examples:
         examples = DEFAULT_EXAMPLES
@@ -292,6 +309,8 @@ def run_factormad_debug(input_data: dict[str, Any]) -> dict[str, Any]:
         outsample_time_range=(outsample[0], outsample[1]),
         label_config=label_config,
         demo_symbol=str(input_data.get("demo_symbol", "")),
+        feature_catalog=feature_catalog,
+        market_data_input=input_data,
     )
     debugger = FactorMADDebugger(
         evaluator=evaluator,
@@ -300,6 +319,7 @@ def run_factormad_debug(input_data: dict[str, Any]) -> dict[str, Any]:
         factor_requirement=factor_requirement,
         examples=examples,
         llm_name=llm_name,
+        min_factor_nonnull_rate=float(input_data.get("min_factor_nonnull_rate", 0.01)),
     )
 
     input_factors = _load_input_factors(input_data)
@@ -355,6 +375,8 @@ def run_factormad_debug(input_data: dict[str, Any]) -> dict[str, Any]:
         "insample_time_range": [str(insample[0]), str(insample[1])],
         "outsample_time_range": [str(outsample[0]), str(outsample[1])],
         "metric_time_ranges": evaluator.metric_time_ranges(),
+        "market_data_summary": market_data_summary,
+        "feature_catalog": feature_catalog,
         "debugged_factors": debugged_factors,
         "failed_factors": failed_factors,
         "best_factor": best_factor,

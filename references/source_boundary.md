@@ -2,7 +2,7 @@
 
 Allowed sources:
 
-- User-provided market-data CSV files that the user has rights to use.
+- User-provided market-data CSV/Parquet files and point-in-time fundamental manifests that the user has rights to use.
 - Public papers, documentation, and examples with attribution.
 - Synthetic or toy data included in this repository for mechanical validation.
 - User-provided seed factor definitions and parameter files.

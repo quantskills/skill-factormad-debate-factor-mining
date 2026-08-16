@@ -10,11 +10,11 @@ Provides:
 
 from __future__ import annotations
 
+import json
 import os
 import re
-from typing import Any
-import json
 from pathlib import Path
+from typing import Any, Iterable
 
 import numpy as np
 import pandas as pd
@@ -116,8 +116,102 @@ def build_matrices(df: pd.DataFrame) -> dict[str, pd.DataFrame]:
     return matrices
 
 
-def load_market_data_frame(input_data: dict[str, Any]) -> pd.DataFrame:
-    """Load market data from a CSV path.
+def _market_data_path(input_data: dict[str, Any]) -> Path:
+    raw_path = str(
+        input_data.get("market_data_path")
+        or input_data.get("market_data_csv_path")
+        or ""
+    ).strip()
+    if not raw_path:
+        raise ValueError("market_data_path or market_data_csv_path is required.")
+    path = Path(raw_path).expanduser().resolve()
+    if not path.exists():
+        raise FileNotFoundError(f"market data path not found: {path}")
+    return path
+
+
+def inspect_market_data_source(input_data: dict[str, Any]) -> dict[str, Any]:
+    """Inspect a CSV or Parquet source without loading the full panel."""
+    path = _market_data_path(input_data)
+    if path.is_file() and path.suffix.lower() == ".csv":
+        columns = pd.read_csv(path, nrows=0).columns.astype(str).tolist()
+        return {
+            "path": str(path),
+            "format": "csv",
+            "partitioned": False,
+            "columns": columns,
+            "row_count": None,
+        }
+
+    try:
+        import pyarrow.dataset as ds
+        import pyarrow.parquet as pq
+    except ImportError as exc:  # pragma: no cover - dependency contract
+        raise RuntimeError("pyarrow is required to read Parquet market data") from exc
+
+    if path.is_file():
+        if path.suffix.lower() not in {".parquet", ".pq"}:
+            raise ValueError(f"unsupported market data file: {path}")
+        parquet_file = pq.ParquetFile(path)
+        return {
+            "path": str(path),
+            "format": "parquet",
+            "partitioned": False,
+            "columns": parquet_file.schema_arrow.names,
+            "row_count": int(parquet_file.metadata.num_rows),
+        }
+
+    dataset = ds.dataset(path, format="parquet", partitioning="hive")
+    return {
+        "path": str(path),
+        "format": "parquet",
+        "partitioned": True,
+        "columns": dataset.schema.names,
+        "row_count": int(dataset.count_rows()),
+    }
+
+
+def _arrow_date_value(field_type: Any, value: str) -> Any:
+    timestamp = pd.Timestamp(value)
+    try:
+        import pyarrow.types as patypes
+    except ImportError:  # pragma: no cover - imported by caller
+        return value
+    if patypes.is_date(field_type):
+        return timestamp.date()
+    if patypes.is_timestamp(field_type):
+        return timestamp.to_pydatetime()
+    if patypes.is_integer(field_type):
+        return int(timestamp.strftime("%Y%m%d"))
+    return timestamp.strftime("%Y-%m-%d")
+
+
+def _normalize_date_series(series: pd.Series) -> pd.Series:
+    raw = series.astype("string").str.strip()
+    compact = (
+        raw.str.replace("-", "", regex=False)
+        .str.replace("/", "", regex=False)
+        .str.replace(r"\.0$", "", regex=True)
+    )
+    yyyymmdd = compact.str.fullmatch(r"\d{8}", na=False)
+    parsed = pd.Series(pd.NaT, index=series.index, dtype="datetime64[ns]")
+    parsed.loc[yyyymmdd] = pd.to_datetime(
+        compact.loc[yyyymmdd],
+        format="%Y%m%d",
+        errors="coerce",
+    )
+    parsed.loc[~yyyymmdd] = pd.to_datetime(raw.loc[~yyyymmdd], errors="coerce")
+    return parsed
+
+
+def load_market_data_frame(
+    input_data: dict[str, Any],
+    *,
+    columns: Iterable[str] | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> pd.DataFrame:
+    """Load a projected date range from CSV or Parquet market data.
 
     Args:
         input_data: Parsed skill input JSON.
@@ -127,23 +221,53 @@ def load_market_data_frame(input_data: dict[str, Any]) -> pd.DataFrame:
 
     Raises:
         ValueError: If the input is missing or malformed.
-        FileNotFoundError: If a referenced CSV path does not exist.
+        FileNotFoundError: If the referenced source does not exist.
     """
-    market_data_csv_path = str(input_data.get("market_data_csv_path", "")).strip()
+    path = _market_data_path(input_data)
+    requested = list(dict.fromkeys(["date", "symbol", *(columns or [])]))
+    requested_columns = requested if columns is not None else None
 
-    if not market_data_csv_path:
-        raise ValueError("market_data_csv_path is required. Run get_market_data first and pass its CSV path.")
-    if not os.path.isfile(market_data_csv_path):
-        raise FileNotFoundError(f"market_data_csv_path not found: {market_data_csv_path}")
-    df_raw = pd.read_csv(market_data_csv_path)
+    if path.is_file() and path.suffix.lower() == ".csv":
+        df_raw = pd.read_csv(path, usecols=requested_columns)
+        if start_date or end_date:
+            dates = _normalize_date_series(df_raw["date"])
+            mask = pd.Series(True, index=df_raw.index)
+            if start_date:
+                mask &= dates >= pd.Timestamp(start_date)
+            if end_date:
+                mask &= dates <= pd.Timestamp(end_date)
+            df_raw = df_raw.loc[mask]
+    else:
+        try:
+            import pyarrow.dataset as ds
+        except ImportError as exc:  # pragma: no cover - dependency contract
+            raise RuntimeError("pyarrow is required to read Parquet market data") from exc
+        if path.is_file() and path.suffix.lower() not in {".parquet", ".pq"}:
+            raise ValueError(f"unsupported market data file: {path}")
+        dataset = ds.dataset(path, format="parquet", partitioning="hive")
+        missing = sorted(set(requested_columns or []) - set(dataset.schema.names))
+        if missing:
+            raise ValueError(f"market data is missing requested columns: {missing}")
+        date_field = dataset.schema.field("date")
+        date_filter = None
+        if start_date:
+            date_filter = ds.field("date") >= _arrow_date_value(date_field.type, start_date)
+        if end_date:
+            upper = ds.field("date") <= _arrow_date_value(date_field.type, end_date)
+            date_filter = upper if date_filter is None else date_filter & upper
+        table = dataset.to_table(columns=requested_columns, filter=date_filter)
+        df_raw = table.to_pandas()
 
     if df_raw.empty:
-        raise ValueError("market_data_csv_path points to an empty CSV.")
+        raise ValueError("market data source contains no rows in the requested range.")
     if "date" not in df_raw.columns or "symbol" not in df_raw.columns:
-        raise ValueError("market data CSV must include 'date' and 'symbol' columns.")
+        raise ValueError("market data must include 'date' and 'symbol' columns.")
 
     df_raw = df_raw.copy()
-    df_raw["date"] = df_raw["date"].astype(str)
+    dates = _normalize_date_series(df_raw["date"])
+    df_raw["date"] = dates.dt.strftime("%Y-%m-%d")
+    df_raw["symbol"] = df_raw["symbol"].astype(str)
+    df_raw = df_raw.dropna(subset=["date", "symbol"])
     return df_raw
 
 

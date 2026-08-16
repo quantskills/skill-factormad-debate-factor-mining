@@ -17,6 +17,7 @@ import pandas as pd
 
 from .alpha_compute import build_alpha_output_frame
 from .alpha_ops import (
+    inspect_market_data_source,
     load_market_data_frame,
     write_dataframe_csv,
     write_json_output,
@@ -24,6 +25,11 @@ from .alpha_ops import (
 from .factormad_alpha_library import (
     load_factormad_library,
     resolve_factormad_library_path,
+)
+from .factormad_feature_catalog import (
+    REQUIRED_MARKET_FIELDS,
+    analyze_factor_code,
+    build_feature_catalog,
 )
 
 
@@ -290,25 +296,61 @@ def metric_time_ranges(
     }
 
 
-def load_factormad_market_data(market_data_csv_path: str) -> pd.DataFrame:
-    raw = load_market_data_frame({"market_data_csv_path": market_data_csv_path})
+def load_factormad_market_data(
+    source: str | dict[str, Any],
+    *,
+    columns: list[str] | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    require_ohlcv: bool = True,
+) -> pd.DataFrame:
+    input_data = (
+        {"market_data_csv_path": source}
+        if isinstance(source, str)
+        else dict(source)
+    )
+    available_columns = set(
+        input_data.get("_market_data_source_columns")
+        or inspect_market_data_source(input_data)["columns"]
+    )
+    requested_columns = set(columns or available_columns)
+    if require_ohlcv:
+        requested_columns.update(REQUIRED_MARKET_FIELDS)
+    requested_columns = {
+        column
+        for column in requested_columns
+        if column in available_columns or column not in {"amount", "vwap"}
+    }
+    raw = load_market_data_frame(
+        input_data,
+        columns=sorted(requested_columns),
+        start_date=start_date,
+        end_date=end_date,
+    )
     df = raw.copy()
     df["date"] = df["date"].astype(str)
     df["symbol"] = df["symbol"].astype(str)
 
-    required = {"date", "symbol", "open", "high", "low", "close", "volume"}
+    required = (
+        {"date", "symbol", *REQUIRED_MARKET_FIELDS}
+        if require_ohlcv
+        else {"date", "symbol"}
+    )
     missing = required - set(df.columns)
     if missing:
         raise ValueError(f"market data is missing required columns for FactorMAD: {sorted(missing)}")
 
-    for col in ["open", "high", "low", "close", "volume", "amount", "vwap"]:
+    for col in [column for column in df.columns if column not in {"date", "symbol"}]:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
 
     has_true_amount = "amount" in df.columns
-    if not has_true_amount:
+    if not has_true_amount and {"close", "volume"}.issubset(df.columns):
         df["amount"] = df["close"] * df["volume"]
-    if "vwap" not in df.columns or df["vwap"].isna().all():
+    if (
+        {"amount", "volume"}.issubset(df.columns)
+        and ("vwap" not in df.columns or df["vwap"].isna().all())
+    ):
         volume = df["volume"].where(df["volume"] != 0)
         raw_vwap = df["amount"] / volume
         if has_true_amount and "adjfactor" in df.columns:
@@ -323,6 +365,55 @@ def load_factormad_market_data(market_data_csv_path: str) -> pd.DataFrame:
     df = df.set_index(["time", "symbol"]).sort_index()
     df.index = df.index.set_names(["time", "symbol"])
     return df
+
+
+def prepare_factormad_market_data(
+    input_data: dict[str, Any],
+) -> tuple[pd.DataFrame, dict[str, Any], dict[str, Any]]:
+    source_info = inspect_market_data_source(input_data)
+    catalog = build_feature_catalog(input_data, source_info["columns"])
+    if (
+        source_info.get("row_count") is not None
+        and catalog.get("manifest_rows") is not None
+        and int(source_info["row_count"]) != int(catalog["manifest_rows"])
+    ):
+        raise ValueError(
+            "market data row count does not match manifest: "
+            f"{source_info['row_count']} != {catalog['manifest_rows']}"
+        )
+    label_config = input_data.get("label_config")
+    if not isinstance(label_config, dict):
+        label_config = {"price": "vwap", "span": 10, "preprocess": "cs_zscore"}
+    base_columns = sorted(
+        set(catalog.get("market_fields", []))
+        | set(REQUIRED_MARKET_FIELDS)
+        | {str(label_config.get("price", "vwap"))}
+    )
+    load_range = input_data.get("market_data_load_range")
+    start_date = end_date = None
+    if load_range is not None:
+        if not isinstance(load_range, list) or len(load_range) != 2:
+            raise ValueError("market_data_load_range must be a two-date list")
+        start_date, end_date = str(load_range[0]), str(load_range[1])
+    load_input = dict(input_data)
+    load_input["_market_data_source_columns"] = source_info["columns"]
+    raw_data = load_factormad_market_data(
+        load_input,
+        columns=base_columns,
+        start_date=start_date,
+        end_date=end_date,
+    )
+    source_info = dict(source_info)
+    source_info.update(
+        {
+            "loaded_row_count": int(len(raw_data)),
+            "loaded_columns": list(raw_data.columns),
+            "start_date": str(raw_data.index.get_level_values("time").min().date()),
+            "end_date": str(raw_data.index.get_level_values("time").max().date()),
+            "symbol_count": int(raw_data.index.get_level_values("symbol").nunique()),
+        }
+    )
+    return raw_data, catalog, source_info
 
 
 def load_skill_dotenv() -> None:
@@ -441,6 +532,8 @@ class LightweightFactorEvaluator:
         label_config: dict[str, Any],
         demo_symbol: str = "",
         evaluation_mode: str = "pearson_ic",
+        feature_catalog: dict[str, Any] | None = None,
+        market_data_input: dict[str, Any] | None = None,
     ):
         self.raw_data = raw_data.sort_index()
         self.insample_time_range = insample_time_range
@@ -448,7 +541,69 @@ class LightweightFactorEvaluator:
         self.label_config = label_config
         self.demo_symbol = demo_symbol
         self.evaluation_mode = normalize_evaluation_mode(evaluation_mode)
+        self.feature_catalog = feature_catalog or {
+            "data_profile": "ohlcv_v1",
+            "factor_mode": "any",
+            "allowed_fields": list(raw_data.columns),
+            "market_fields": list(raw_data.columns),
+            "fundamental_fields": [],
+            "manifest_path": None,
+            "manifest_sha256": None,
+        }
+        self.market_data_input = dict(market_data_input or {})
+        self.market_data_input.setdefault(
+            "_market_data_source_columns",
+            self.feature_catalog.get("source_columns", []),
+        )
         self._prepare_labels()
+
+    def analyze_code(
+        self,
+        factor_code: str,
+        factor_args: dict[str, Any],
+        *,
+        enforce_mode: bool,
+    ) -> tuple[set[str], list[dict[str, str]]]:
+        return analyze_factor_code(
+            factor_code,
+            factor_args,
+            self.feature_catalog,
+            enforce_mode=enforce_mode,
+        )
+
+    def _load_factor_data(
+        self,
+        referenced_fields: set[str],
+        *,
+        raw_data: pd.DataFrame | None,
+        test_range: tuple[str, str] | None,
+    ) -> pd.DataFrame:
+        base = self.raw_data if raw_data is None else raw_data
+        missing = referenced_fields - set(base.columns)
+        if missing:
+            if raw_data is not None or not self.market_data_input:
+                raise ValueError(f"factor fields are not loaded: {sorted(missing)}")
+            load_range = self.market_data_input.get("market_data_load_range")
+            start_date = str(load_range[0]) if isinstance(load_range, list) and len(load_range) == 2 else None
+            end_date = str(load_range[1]) if isinstance(load_range, list) and len(load_range) == 2 else None
+            if test_range is not None:
+                start_date, end_date = str(test_range[0]), str(test_range[1])
+            loaded = load_factormad_market_data(
+                self.market_data_input,
+                columns=sorted(missing),
+                start_date=start_date,
+                end_date=end_date,
+                require_ohlcv=False,
+            )
+            base = base.loc[:, sorted(referenced_fields & set(base.columns))].join(
+                loaded.loc[:, sorted(missing)],
+                how="inner",
+            )
+        data = base.loc[:, sorted(referenced_fields)]
+        if test_range is not None:
+            slices = (pd.Timestamp(test_range[0]), pd.Timestamp(test_range[1]))
+            data = data.loc[slices[0]:slices[1], :]
+        return data
 
     def _prepare_labels(self) -> None:
         label_price = str(self.label_config.get("price", "vwap"))
@@ -489,10 +644,19 @@ class LightweightFactorEvaluator:
         test_symbols: list[str] | None = None,
         timeout_seconds: int = 0,
     ) -> pd.Series:
-        data = self.raw_data if raw_data is None else raw_data
-        if test_range is not None:
-            slices = (pd.Timestamp(test_range[0]), pd.Timestamp(test_range[1]))
-            data = data.loc[slices[0]:slices[1], :]
+        referenced_fields, violations = self.analyze_code(
+            factor_code,
+            factor_args,
+            enforce_mode=False,
+        )
+        if violations:
+            message = "; ".join(item["message"] for item in violations)
+            raise ValueError(message)
+        data = self._load_factor_data(
+            referenced_fields,
+            raw_data=raw_data,
+            test_range=test_range,
+        )
         if test_symbols:
             current_symbols = data.index.get_level_values("symbol").unique().tolist()
             selected = [symbol for symbol in test_symbols if symbol in current_symbols]
@@ -513,7 +677,9 @@ class LightweightFactorEvaluator:
             if not isinstance(value, pd.Series):
                 raise TypeError("Factor function must return a pandas Series.")
             value.index = value.index.set_names(["time", "symbol"])
-            return value.sort_index().astype("float32")
+            if value.index.has_duplicates:
+                raise ValueError("Factor output index contains duplicate rows.")
+            return value.sort_index().reindex(data.index).astype("float32")
 
         return run_with_timeout(_run, timeout_seconds)
 
@@ -667,6 +833,9 @@ class LightweightFactorEvaluator:
             "outsample_time_range": [str(self.outsample_time_range[0]), str(self.outsample_time_range[1])],
             "demo_symbol": demo_symbol,
             "value": value,
+            "referenced_fields": sorted(
+                self.analyze_code(factor_code, factor_args, enforce_mode=False)[0]
+            ),
         }
 
 
@@ -696,6 +865,11 @@ def complete_factor(
         "evaluation_mode": res_dict.get("evaluation_mode", evaluator.evaluation_mode),
         "insample_time_range": res_dict["insample_time_range"],
         "outsample_time_range": res_dict["outsample_time_range"],
+        "referenced_fields": res_dict.get("referenced_fields", []),
+        "data_profile": evaluator.feature_catalog.get("data_profile"),
+        "factor_mode": evaluator.feature_catalog.get("factor_mode"),
+        "market_data_manifest_path": evaluator.feature_catalog.get("manifest_path"),
+        "market_data_manifest_sha256": evaluator.feature_catalog.get("manifest_sha256"),
     }
     return factor_info
 

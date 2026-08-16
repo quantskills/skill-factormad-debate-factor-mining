@@ -73,6 +73,12 @@ def normalize_library_factor(factor: dict[str, Any]) -> dict[str, Any] | None:
         "insample_time_range",
         "outsample_time_range",
         "market_data_csv_path",
+        "market_data_path",
+        "data_profile",
+        "factor_mode",
+        "referenced_fields",
+        "market_data_manifest_path",
+        "market_data_manifest_sha256",
         "label_config",
         "evaluation_mode",
         "pearson_direction",
@@ -111,8 +117,16 @@ def is_library_effective_factor(factor: dict[str, Any], *, exclude_seed: bool = 
     return has_finite_library_metrics(factor)
 
 
-def load_factormad_library(path: str | Path | None = None) -> list[dict[str, Any]]:
-    library_path = ensure_factormad_library(path)
+def load_factormad_library(
+    path: str | Path | None = None,
+    *,
+    create_if_missing: bool = True,
+) -> list[dict[str, Any]]:
+    library_path = resolve_factormad_library_path(str(path) if path is not None else None)
+    if create_if_missing:
+        library_path = ensure_factormad_library(library_path)
+    elif not library_path.is_file():
+        raise FileNotFoundError(f"FactorMAD library not found: {library_path}")
     try:
         loaded = json.loads(library_path.read_text(encoding="utf-8") or "[]")
     except json.JSONDecodeError:

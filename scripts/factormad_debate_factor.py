@@ -16,13 +16,16 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-import pandas as pd
-
+from factormad_runtime.alpha_ops import inspect_market_data_source
 from factormad_runtime.factormad_compute_runtime import (
     default_key_metric_for_evaluation_mode,
     normalize_evaluation_mode,
 )
 from factormad_runtime.factormad_debate_runtime import run_factormad_debate
+from factormad_runtime.factormad_feature_catalog import (
+    build_factor_requirement,
+    build_feature_catalog,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -103,7 +106,9 @@ def _output_dir_from_args(input_path: Path, explicit_output: str | None) -> Path
 def _normalize_input_paths(input_data: dict[str, Any], *, input_path: Path) -> dict[str, Any]:
     normalized = dict(input_data)
     for key in (
+        "market_data_path",
         "market_data_csv_path",
+        "market_data_manifest_path",
         "seed_factors_json_path",
         "seed_alphas_json_path",
         "factormad_alpha_library_path",
@@ -112,6 +117,13 @@ def _normalize_input_paths(input_data: dict[str, Any], *, input_path: Path) -> d
         value = normalized.get(key)
         if isinstance(value, str) and value.strip():
             normalized[key] = _resolve_path(value.strip(), input_path=input_path)
+    read_paths = normalized.get("few_shot_library_paths")
+    if isinstance(read_paths, list):
+        normalized["few_shot_library_paths"] = [
+            _resolve_path(str(value).strip(), input_path=input_path)
+            for value in read_paths
+            if str(value).strip()
+        ]
     return normalized
 
 
@@ -132,27 +144,39 @@ def _metric_time_ranges(insample_time_range: list[str], outsample_time_range: li
     }
 
 
-def _market_data_summary(market_data_csv_path: str) -> dict[str, Any]:
-    frame = pd.read_csv(market_data_csv_path)
+def _market_data_summary(input_data: dict[str, Any]) -> dict[str, Any]:
+    summary = inspect_market_data_source(input_data)
     required = {"date", "symbol"}
-    missing = sorted(required - set(frame.columns))
+    missing = sorted(required - set(summary["columns"]))
     if missing:
-        raise ValueError(f"market data CSV missing required columns: {missing}")
-    return {
-        "market_data_csv_path": market_data_csv_path,
-        "row_count": int(len(frame)),
-        "symbol_count": int(frame["symbol"].astype(str).nunique()),
-        "start_date": str(frame["date"].min()),
-        "end_date": str(frame["date"].max()),
-        "columns": list(frame.columns),
-    }
+        raise ValueError(f"market data missing required columns: {missing}")
+    manifest_path = str(input_data.get("market_data_manifest_path") or "").strip()
+    if manifest_path:
+        manifest = _load_json(Path(manifest_path))
+        manifest_rows = manifest.get("rows")
+        if (
+            summary.get("row_count") is not None
+            and manifest_rows is not None
+            and int(summary["row_count"]) != int(manifest_rows)
+        ):
+            raise ValueError(
+                "market data row count does not match manifest: "
+                f"{summary['row_count']} != {manifest_rows}"
+            )
+        date_range = manifest.get("date_range", {})
+        summary.update({
+            "row_count": manifest.get("rows", summary.get("row_count")),
+            "symbol_count": manifest.get("symbols"),
+            "start_date": date_range.get("panel_start") or date_range.get("start"),
+            "end_date": date_range.get("panel_end") or date_range.get("end"),
+        })
+    return summary
 
 
 def _dry_run(input_data: dict[str, Any], output_dir: Path) -> dict[str, Any]:
-    market_data_csv_path = str(input_data.get("market_data_csv_path", "")).strip()
-    if not market_data_csv_path:
-        raise ValueError("market_data_csv_path is required.")
-    summary = _market_data_summary(market_data_csv_path)
+    summary = _market_data_summary(input_data)
+    feature_catalog = build_feature_catalog(input_data, summary["columns"])
+    factor_requirement = build_factor_requirement(input_data, feature_catalog)
     insample = input_data.get("insample_time_range", ["2020-01-01", "2021-12-31"])
     outsample = input_data.get("outsample_time_range", ["2022-01-01", "2022-12-31"])
     metric_ranges = _metric_time_ranges(insample, outsample)
@@ -164,18 +188,35 @@ def _dry_run(input_data: dict[str, Any], output_dir: Path) -> dict[str, Any]:
     legacy_threshold = float(input_data.get("factor_metric_threshold", 0.2))
     icir_threshold = float(input_data.get("icir_threshold", legacy_threshold))
     rank_icir_threshold = float(input_data.get("rank_icir_threshold", legacy_threshold))
-    factor_code = (
-        "def dry_run_close_to_vwap_gap(data, window=5):\n"
-        "    eps = 1e-8\n"
-        "    close = pd.to_numeric(data['close'], errors='coerce').astype(float)\n"
-        "    vwap = pd.to_numeric(data['vwap'], errors='coerce').astype(float)\n"
-        "    raw = close.div(vwap.abs() + eps).sub(1.0).replace([np.inf, -np.inf], np.nan)\n"
-        "    return raw.groupby(level='symbol', sort=False).transform(lambda s: s.rolling(window, min_periods=2).mean())\n"
-    )
+    fundamental_fields = feature_catalog.get("fundamental_fields", [])
+    if feature_catalog.get("factor_mode") == "hybrid" and fundamental_fields:
+        fundamental_field = fundamental_fields[0]
+        factor_name = "dry_run_hybrid_value_momentum"
+        factor_code = (
+            f"def {factor_name}(data, window=5):\n"
+            "    close = pd.to_numeric(data['close'], errors='coerce').astype(float)\n"
+            f"    fundamental = pd.to_numeric(data['{fundamental_field}'], errors='coerce').astype(float)\n"
+            "    momentum = close.groupby(level='symbol', sort=False).pct_change(window)\n"
+            "    cs_std = fundamental.groupby(level='time', sort=False).transform('std').replace(0, np.nan)\n"
+            "    cs_value = fundamental.sub(fundamental.groupby(level='time', sort=False).transform('mean')).div(cs_std)\n"
+            "    return cs_value.mul(momentum).replace([np.inf, -np.inf], np.nan)\n"
+        )
+        referenced_fields = ["close", fundamental_field]
+    else:
+        factor_name = "dry_run_close_to_vwap_gap"
+        factor_code = (
+            f"def {factor_name}(data, window=5):\n"
+            "    eps = 1e-8\n"
+            "    close = pd.to_numeric(data['close'], errors='coerce').astype(float)\n"
+            "    vwap = pd.to_numeric(data['vwap'], errors='coerce').astype(float)\n"
+            "    raw = close.div(vwap.abs() + eps).sub(1.0).replace([np.inf, -np.inf], np.nan)\n"
+            "    return raw.groupby(level='symbol', sort=False).transform(lambda s: s.rolling(window, min_periods=2).mean())\n"
+        )
+        referenced_fields = ["close", "vwap"]
     best_factor = {
-        "name": "dry_run_close_to_vwap_gap",
+        "name": factor_name,
         "code": factor_code,
-        "entry_function": "dry_run_close_to_vwap_gap",
+        "entry_function": factor_name,
         "arguments": {"window": 5},
         "metric": {
             "IC": 0.0,
@@ -197,6 +238,11 @@ def _dry_run(input_data: dict[str, Any], output_dir: Path) -> dict[str, Any]:
         "outsample_time_range": metric_ranges["O-IC"]["time_range"],
         "status": "dry_run",
         "source": "dry_run",
+        "referenced_fields": referenced_fields,
+        "data_profile": feature_catalog.get("data_profile"),
+        "factor_mode": feature_catalog.get("factor_mode"),
+        "market_data_manifest_path": feature_catalog.get("manifest_path"),
+        "market_data_manifest_sha256": feature_catalog.get("manifest_sha256"),
     }
     debate_rounds = [{
         "round": 0,
@@ -216,6 +262,8 @@ def _dry_run(input_data: dict[str, Any], output_dir: Path) -> dict[str, Any]:
         "round_count": 0,
         "llm_fee": 0.0,
         "market_data_summary": summary,
+        "feature_catalog": feature_catalog,
+        "factor_requirement": factor_requirement,
         "debate_rounds": debate_rounds,
         "generated_factors": accepted_factors,
         "accepted_factors": accepted_factors,
@@ -327,4 +375,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

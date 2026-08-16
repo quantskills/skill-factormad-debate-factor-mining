@@ -27,7 +27,7 @@ This is not a factor library or a backtest engine. It is a **FactorMAD-style LLM
 
 `skill-factormad-debate-factor-mining` is a self-contained QUANTSKILLS community skill. It follows the core idea of the FactorMAD paper: two LLM agents debate, critique, and revise candidate factors, then export candidates as executable Python functions instead of restricting factor discovery to a predefined operator set.
 
-This repository provides a research workflow that starts from OHLCV market data, generates candidate factor code, performs basic code validation and lightweight Pearson IC, RankIC, and ICIR-style evaluation, then writes auditable JSON artifacts.
+This repository provides a research workflow that starts from daily OHLCV data or a point-in-time OHLCV/fundamental Parquet panel, generates candidate factor code, performs basic code validation and lightweight Pearson IC, RankIC, and ICIR-style evaluation, then writes auditable JSON artifacts.
 
 ## What Problem This Skill Solves
 
@@ -51,7 +51,7 @@ This skill provides:
 ## Workflow
 
 ```text
-1. Prepare an OHLCV market_data.csv file.
+1. Prepare an OHLCV CSV, or a partitioned OHLCV/fundamental Parquet panel and its PIT manifest.
 2. Prepare an input JSON. The public example uses dry_run=true for mechanical validation.
 3. For real runs, copy the example config, configure API credentials through .env or shell variables, and set dry_run=false.
 4. Two LLM agents generate, critique, and revise candidate factors.
@@ -80,12 +80,14 @@ outputs/debateYYYYMMDDHHMMSS/
 
 ## Input Requirements
 
-At minimum, provide a market CSV:
+At minimum, provide a market CSV, one Parquet file, or a partitioned Parquet dataset:
 
 - It must contain `date` and `symbol`.
 - Real factor evaluation requires `open`, `high`, `low`, `close`, and `volume`.
 - `amount` is optional; when missing, the runtime creates it as `close * volume`.
 - `vwap` is optional; when missing, the runtime creates it as `amount / volume`. It applies `adjfactor` only when the original CSV already contains `amount` and also provides `adjfactor`.
+- Fundamental and hybrid modes also require `market_data_manifest_path` with `future_backfill=false`.
+- The runtime projects only fields referenced by each candidate. Quarterly values are stepwise daily states after activation, not daily disclosures.
 - The data must be data the user has the right to use.
 - `date` should use `YYYY-MM-DD` or another pandas-parseable date format.
 - `symbol` is used as the cross-sectional grouping key; each trading day should include multiple stocks.
@@ -195,7 +197,7 @@ cp .env.example .env
 # edit .env, fill OPENAI_API_KEY or FACTORMAD_OPENAI_API_KEY
 ```
 
-Then set `dry_run` to `false` and update `market_data_csv_path`, time ranges, and label settings for your data:
+Then set `dry_run` to `false` and update `market_data_path`, the manifest, time ranges, and label settings for your data:
 
 ```bash
 python scripts/factormad_debate_factor.py \
@@ -214,7 +216,9 @@ During real runs, the CLI prints visible progress such as market data loading, s
 
 | Field | Type | Description |
 | --- | --- | --- |
-| `market_data_csv_path` | string | Market CSV path. Must contain `date` and `symbol`; real runs require OHLCV and volume fields. |
+| `market_data_path` | string | CSV, single-Parquet, or partitioned-Parquet path; legacy `market_data_csv_path` remains supported. |
+| `market_data_manifest_path` | string | PIT manifest required for fundamental or hybrid mode. |
+| `factor_mode` | string | `ohlcv`, `fundamental`, `hybrid`, or `any`. |
 | `dry_run` | boolean | When `true`, validate inputs, paths, and output contracts without calling an LLM. Set to `false` for real mining. |
 | `output_dir` | string | Optional output directory used when `--output` is not passed. CLI output takes precedence. |
 | `insample_time_range` | list[string, string] | In-sample range used for `IC` and `ICIR`. |
@@ -411,7 +415,7 @@ debate-factor-mining -> factor-debugging -> compute alpha -> evaluate / backtest
 - **Project status**: Community Project, not officially reviewed, certified, or endorsed by QUANTSKILLS.
 - **Platform**: Codex only (`platforms: [codex]`).
 - **Data source**: This repository includes toy data only. Real data is user-provided, and users are responsible for data licensing and compliance.
-- **Core assumption**: Daily OHLCV cross-sectional factor research. Lightweight Pearson IC, RankIC, and ICIR-style metrics are used for candidate screening.
+- **Core assumption**: Daily OHLCV and point-in-time fundamental cross-sectional factor research. Lightweight Pearson IC, RankIC, and ICIR-style metrics are used for candidate screening.
 - **Known limitations**: No transaction costs, market impact, suspension/liquidity modeling, industry/style exposure control, portfolio constraints, or real execution modeling.
 - **Risk boundary**: Historical statistics do not imply future performance. LLM-generated code requires human review and independent validation.
 - **Use**: For quantitative research, education, and methodology reference only. Not investment advice, trading signals, or profit assurance.

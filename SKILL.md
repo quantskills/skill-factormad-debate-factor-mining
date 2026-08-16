@@ -1,6 +1,6 @@
 ---
 name: factormad-debate-factor-mining
-description: "Run a self-contained FactorMAD-style LLM multi-agent debate workflow for mining interpretable code-based stock alpha factors from OHLCV market data. Use when an agent needs to generate, debate, validate, score, and export candidate alpha factor code for quantitative research."
+description: "Run a self-contained FactorMAD-style LLM multi-agent debate workflow for mining interpretable code-based stock alpha factors from daily OHLCV and point-in-time fundamental data. Use when an agent needs to generate, debate, validate, score, and export OHLCV, fundamental, or hybrid candidate alpha factor code for quantitative research."
 quantSkills:
   organization: https://github.com/quantskills
   repository: quantskills/skill-factormad-debate-factor-mining
@@ -16,8 +16,8 @@ quantSkills:
   validation_level: runnable
   maintainer_type: community
   requires: []
-  summary_zh: 使用 FactorMAD 风格的 LLM 多智能体辩论流程从 OHLCV 行情数据中挖掘代码型股票 Alpha 因子。
-  summary_en: Mine interpretable code-based stock alpha factors from OHLCV market data with a FactorMAD-style LLM debate workflow.
+  summary_zh: 使用 FactorMAD 风格的 LLM 多智能体辩论流程从日频 OHLCV 与时点一致基本面数据中挖掘代码型股票 Alpha 因子。
+  summary_en: Mine interpretable code-based stock alpha factors from daily OHLCV and point-in-time fundamental data with a FactorMAD-style LLM debate workflow.
 ---
 
 ```json qsh-form
@@ -58,7 +58,7 @@ Use this skill to run a FactorMAD-style multi-agent debate workflow that propose
 
 1. Read `references/input_schema.md` before preparing the input JSON.
 2. Use `dry_run=true` first to validate installation, paths, and output artifacts without an LLM call.
-3. For a real run, configure `.env` from `.env.example` or set `OPENAI_API_KEY` / `FACTORMAD_OPENAI_API_KEY`, provide OHLCV market data, and run:
+3. For a real run, configure `.env` from `.env.example` or set `OPENAI_API_KEY` / `FACTORMAD_OPENAI_API_KEY`, provide either OHLCV CSV data or a point-in-time OHLCV/fundamental Parquet panel plus its manifest, and run:
 
 ```bash
 python scripts/factormad_debate_factor.py --input examples/debate_input.json
@@ -66,6 +66,8 @@ python scripts/factormad_debate_factor.py --input examples/debate_input.json
 
 4. Read `references/output_contract.md` before consuming generated artifacts.
 5. Treat lightweight Pearson IC, RankIC, and ICIR-style metrics as internal selection evidence only; run independent out-of-sample and portfolio validation before using any factor downstream.
+
+For fundamental or hybrid mining, require `point_in_time_contract.future_backfill=false` in the manifest. Treat quarterly values as stepwise daily states after their activation date, not as daily publications. Keep `few_shot_library_paths` read-only and write newly accepted factors only to `factormad_alpha_library_path`.
 
 ## Output Contract
 

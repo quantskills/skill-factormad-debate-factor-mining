@@ -34,6 +34,11 @@ The main result includes:
 - `debate_rounds`: Per-round records with agent view text, candidate factor, status, and error, also written to `debate_rounds.json`.
 - `metric_time_ranges`: Run-level metric labels. `IC`, `ICIR`, `RankIC`, `RankICIR`, and `HybridICIR` use `insample_time_range`; `O-IC`, `O-ICIR`, `O-RankIC`, `O-RankICIR`, and `O-HybridICIR` use `outsample_time_range`.
 - `debate_json_path`, `debate_rounds_path`, `accepted_factors_path`: Artifact paths.
+- `market_data_summary`: Source format, schema, row count when available, and the loaded date/symbol range for real runs.
+- `feature_catalog`: Resolved data profile, factor mode, allowed/excluded fields, coverage thresholds, manifest hash, and point-in-time contract.
+- `factor_requirement`: The complete generated requirement sent to the debate agents.
+- `few_shot_library_paths`: Read-only libraries evaluated for few-shot use.
+- `factormad_alpha_library_path`: Writable target library.
 
 Every factor record in `best_factor`, `generated_factors`, `accepted_factors`, and `invalid_factors` uses the same canonical field names:
 
@@ -45,6 +50,8 @@ Every factor record in `best_factor`, `generated_factors`, `accepted_factors`, a
 - `rank_ic_direction`: Direction inferred from the in-sample RankIC mean, either `1` or `-1`.
 - `direction_consistent`: Whether Pearson IC and RankIC in-sample directions agree. `hybrid` mode requires this to be true.
 - `insample_time_range` and `outsample_time_range`: The two evaluation windows retained on each factor record. Per-metric time-range labels are kept only at the run level.
+- `referenced_fields`: Market and fundamental columns statically extracted from factor code and actually passed to the function.
+- `data_profile`, `factor_mode`, `market_data_manifest_path`, and `market_data_manifest_sha256`: Data-contract lineage for reproducibility.
 
 Legacy inputs using `factor_code`, `factor_arguments`, `best_factor_code`, `best_factor_arguments`, `best_metric`, or `round_records` are still accepted for compatibility, but new outputs use the canonical fields above.
 

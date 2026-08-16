@@ -28,7 +28,7 @@
 
 `skill-factormad-debate-factor-mining` 是一个自包含的 QUANTSKILLS 社区 Skill。它参考 FactorMAD 论文中的核心思想：让两个 LLM Agent 围绕候选因子进行结构化辩论、批评、修正，并把候选因子输出为可执行 Python 函数，而不是限制在预定义算子集合里。
 
-本仓库提供的是一套研究工作流：从 OHLCV 行情数据出发，生成候选因子代码，做基础代码检查和轻量 Pearson IC、RankIC 与 ICIR 类评估，然后输出可审计 JSON 产物。
+本仓库提供的是一套研究工作流：从日频 OHLCV 行情或时点一致的 OHLCV/基本面 Parquet 面板出发，生成候选因子代码，做基础代码检查和轻量 Pearson IC、RankIC 与 ICIR 类评估，然后输出可审计 JSON 产物。
 
 ## 这个 Skill 解决什么问题
 
@@ -52,7 +52,7 @@
 ## 工作流
 
 ```text
-1. 准备 OHLCV market_data.csv
+1. 准备 OHLCV CSV，或准备 OHLCV/基本面分区 Parquet 面板及其 PIT manifest
 2. 准备 input JSON，默认示例已使用 dry_run=true 做机械验证
 3. 真实运行时复制示例配置，通过 `.env` 或 shell 环境变量设置 API key，并将 dry_run 改为 false
 4. 两个 LLM Agent 生成、批评、修正候选因子
@@ -81,7 +81,7 @@ outputs/debateYYYYMMDDHHMMSS/
 
 ## 输入要求
 
-至少需要一个行情 CSV：
+至少需要一个行情 CSV、单文件 Parquet 或分区 Parquet 数据集：
 
 - 必须包含 `date`、`symbol`
 - 真实因子评估必须包含 `open`、`high`、`low`、`close`、`volume`
@@ -91,6 +91,8 @@ outputs/debateYYYYMMDDHHMMSS/
 - `date` 建议使用 `YYYY-MM-DD` 或 pandas 可解析日期格式
 - `symbol` 会作为截面分组键；同一交易日下应包含多个股票
 - `label_config.price` 对应字段必须在 runtime 标准化后存在，例如 `vwap` 可由上述逻辑生成
+- 基本面或混合模式必须同时传入 `market_data_manifest_path`，且 manifest 必须声明 `future_backfill=false`
+- runtime 会按候选代码实际引用的字段投影读取 Parquet；季度基本面值在激活日后作为日频状态持有，并不表示每日重新披露
 
 示例输入文件：
 
@@ -196,7 +198,7 @@ cp .env.example .env
 # edit .env, fill OPENAI_API_KEY or FACTORMAD_OPENAI_API_KEY
 ```
 
-然后将 `dry_run` 改为 `false`，并根据你的数据修改 `market_data_csv_path`、时间区间和标签配置：
+然后将 `dry_run` 改为 `false`，并根据你的数据修改 `market_data_path`、manifest、时间区间和标签配置：
 
 ```bash
 python scripts/factormad_debate_factor.py \
@@ -215,7 +217,9 @@ python scripts/factormad_debate_factor.py \
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
-| `market_data_csv_path` | string | 行情 CSV 路径。必须包含 `date`、`symbol`；真实运行需要 `open`、`high`、`low`、`close`、`volume`，`amount` 和 `vwap` 可由 runtime 补齐 |
+| `market_data_path` | string | CSV、单文件 Parquet 或分区 Parquet 路径；旧的 `market_data_csv_path` 继续兼容 |
+| `market_data_manifest_path` | string | 基本面/混合模式必填的 PIT manifest 路径 |
+| `factor_mode` | string | `ohlcv`、`fundamental`、`hybrid` 或 `any` |
 | `dry_run` | boolean | 为 `true` 时只验证输入、路径和输出契约，不调用 LLM；真实挖掘设为 `false` |
 | `output_dir` | string | 可选输出目录；不传命令行 `--output` 时使用，CLI 参数优先级更高 |
 | `insample_time_range` | list[string, string] | 样本内区间，用于计算 `IC`、`ICIR` |
@@ -406,7 +410,7 @@ outputs/debate_example/
 - **项目状态**：Community Project，未经 QUANTSKILLS 官方审核、认证或背书
 - **平台**：仅支持 Codex（`platforms: [codex]`）
 - **数据来源**：本仓库只包含 toy data；真实数据由使用者自行提供，并由使用者负责数据许可与合规
-- **核心假设**：日频 OHLCV 截面因子研究；轻量 Pearson IC、RankIC 与 ICIR 类指标用作候选筛选
+- **核心假设**：日频 OHLCV 与时点一致基本面截面因子研究；轻量 Pearson IC、RankIC 与 ICIR 类指标用作候选筛选
 - **已知限制**：不模拟交易成本、市场冲击、停牌流动性、行业/风格暴露、组合约束或真实成交细节
 - **风险边界**：历史统计表现不代表未来表现；LLM 生成代码必须人工审查和独立验证
 - **用途**：仅供量化研究、教育和方法论参考，不构成投资建议、交易信号或获利保证
