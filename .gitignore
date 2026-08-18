@@ -9,6 +9,7 @@ sources/
 .venv/
 outputs/
 .skill_outputs/
+factor_library/
 examples/factormad_alpha_library/*
 !examples/factormad_alpha_library/library.json
 
