@@ -83,6 +83,40 @@ def _normalize_date(series: pd.Series, name: str) -> pd.Series:
     return parsed
 
 
+def load_market_data(
+    path: Path,
+    *,
+    start_date: pd.Timestamp,
+    end_date: pd.Timestamp,
+) -> tuple[pd.DataFrame, str]:
+    """Load the canonical OHLCV columns from one CSV or Parquet file."""
+    if not path.is_file():
+        raise FileNotFoundError(f"market data file does not exist: {path}")
+    suffix = path.suffix.lower()
+    if suffix == ".csv":
+        market = pd.read_csv(path, usecols=MARKET_COLUMNS)
+        source_format = "csv"
+    elif suffix in {".parquet", ".pq"}:
+        market = pd.read_parquet(path, columns=MARKET_COLUMNS)
+        source_format = "parquet"
+    else:
+        raise ValueError(
+            f"unsupported market data format {suffix!r}; expected .csv, .parquet, or .pq"
+        )
+
+    missing = sorted(set(MARKET_COLUMNS) - set(market.columns))
+    if missing:
+        raise ValueError(f"market data is missing columns: {missing}")
+    market["date"] = _normalize_date(market["date"], "market.date")
+    market["symbol"] = market["symbol"].astype("string").str.upper().str.strip()
+    market = market.loc[market["date"].between(start_date, end_date)].copy()
+    if market.empty:
+        raise ValueError("market data has no rows in the requested range")
+    if market.duplicated(["date", "symbol"]).any():
+        raise ValueError("market data contains duplicate (date, symbol) rows")
+    return market, source_format
+
+
 def _available_parquet_files(root: Path) -> list[Path]:
     if not root.is_dir():
         raise FileNotFoundError(f"dataset directory does not exist: {root}")
@@ -180,6 +214,62 @@ def attach_activation_dates(frame: pd.DataFrame, calendar: pd.DataFrame) -> pd.D
     return result
 
 
+def merge_statement_sources(
+    base: pd.DataFrame,
+    extended: pd.DataFrame,
+) -> tuple[pd.DataFrame, list[str], list[str], dict[str, Any]]:
+    """Merge complementary PIT statement sources without dropping one-sided events."""
+    for name, frame in (("base", base), ("extended", extended)):
+        missing = sorted(set(KEY_COLUMNS + ["available_date"]) - set(frame.columns))
+        if missing:
+            raise ValueError(f"{name} fundamentals are missing columns: {missing}")
+        if frame.duplicated(KEY_COLUMNS).any():
+            raise ValueError(f"{name} fundamentals contain duplicate statement keys")
+
+    base = base.copy()
+    extended = extended.copy()
+    base["available_date"] = _normalize_date(base["available_date"], "base.available_date")
+    extended["available_date"] = _normalize_date(
+        extended["available_date"], "extended.available_date"
+    )
+    metadata = set(KEY_COLUMNS + ["available_date", "report_year", "report_quarter", "is_warmup"])
+    base_value_columns = [column for column in base.columns if column not in metadata]
+    extended_value_columns = [column for column in extended.columns if column not in metadata]
+    overlap = sorted(set(base_value_columns) & set(extended_value_columns))
+    if overlap:
+        raise ValueError(f"base and extended fundamentals overlap value columns: {overlap}")
+
+    right = extended.loc[
+        :, KEY_COLUMNS + ["available_date"] + extended_value_columns
+    ].rename(columns={"available_date": "extended_available_date"})
+    statements = base.merge(
+        right,
+        on=KEY_COLUMNS,
+        how="outer",
+        validate="one_to_one",
+        indicator="_key_alignment",
+    )
+    both_dates = statements["available_date"].notna() & statements[
+        "extended_available_date"
+    ].notna()
+    date_conflicts = both_dates & statements["available_date"].ne(
+        statements["extended_available_date"]
+    )
+    statements["available_date"] = statements[
+        ["available_date", "extended_available_date"]
+    ].max(axis=1)
+    alignment = {
+        "merge_policy": "outer_preserve_one_sided_rows",
+        "availability_merge_policy": "later_of_base_and_extended",
+        "base_only_rows": int(statements["_key_alignment"].eq("left_only").sum()),
+        "extended_only_rows": int(statements["_key_alignment"].eq("right_only").sum()),
+        "matched_rows": int(statements["_key_alignment"].eq("both").sum()),
+        "available_date_conflicts": int(date_conflicts.sum()),
+    }
+    statements = statements.drop(columns=["extended_available_date", "_key_alignment"])
+    return statements, base_value_columns, extended_value_columns, alignment
+
+
 def load_statement_events(
     store_root: Path,
     calendar: pd.DataFrame,
@@ -193,25 +283,9 @@ def load_statement_events(
     extended = _read_partitioned(extended_root, report_year_max=report_year_max)
     if base.empty or extended.empty:
         raise ValueError("base or extended fundamentals are empty")
-    for name, frame in (("base", base), ("extended", extended)):
-        missing = sorted(set(KEY_COLUMNS + ["available_date"]) - set(frame.columns))
-        if missing:
-            raise ValueError(f"{name} fundamentals are missing columns: {missing}")
-        if frame.duplicated(KEY_COLUMNS).any():
-            raise ValueError(f"{name} fundamentals contain duplicate statement keys")
-    base_keys = pd.MultiIndex.from_frame(base[KEY_COLUMNS])
-    extended_keys = pd.MultiIndex.from_frame(extended[KEY_COLUMNS])
-    if not base_keys.equals(extended_keys):
-        base_key_set = set(base_keys.tolist())
-        extended_key_set = set(extended_keys.tolist())
-        if base_key_set != extended_key_set:
-            raise ValueError("base and extended statement keys do not match")
-        extended = extended.set_index(KEY_COLUMNS).loc[base_key_set].reset_index()
-    metadata = set(KEY_COLUMNS + ["available_date", "report_year", "report_quarter", "is_warmup"])
-    base_value_columns = [column for column in base.columns if column not in metadata]
-    extended_value_columns = [column for column in extended.columns if column not in metadata]
-    right = extended.loc[:, KEY_COLUMNS + extended_value_columns].copy()
-    statements = base.merge(right, on=KEY_COLUMNS, how="inner", validate="one_to_one")
+    statements, base_value_columns, extended_value_columns, alignment = (
+        merge_statement_sources(base, extended)
+    )
     statements["symbol"] = statements["symbol"].astype("string").str.upper().str.strip()
     statements["quarter"] = statements["quarter"].astype("string").str.lower().str.strip()
     valid_quarter = statements["quarter"].str.fullmatch(r"\d{4}q[1-4]", na=False)
@@ -238,6 +312,7 @@ def load_statement_events(
         "base_rows": int(len(base)),
         "extended_rows": int(len(extended)),
         "usable_rows": int(len(statements)),
+        "source_alignment": alignment,
         "flow_fields": flow_fields,
         "balance_fields": balance_fields,
         "if_adjusted_counts": {
@@ -703,7 +778,10 @@ def _write_partitioned_panel(panel: pd.DataFrame, root: Path, compression: str) 
 
 
 def build_panel(args: argparse.Namespace) -> dict[str, Any]:
-    market_path = Path(args.market_csv).expanduser().resolve()
+    market_input = getattr(args, "market_data", None) or getattr(args, "market_csv", None)
+    if not market_input:
+        raise ValueError("one of --market-data or --market-csv is required")
+    market_path = Path(market_input).expanduser().resolve()
     store_root = Path(args.data_store_root).expanduser().resolve()
     output_root = Path(args.output_root).expanduser().resolve()
     start_date = pd.Timestamp(args.start_date)
@@ -726,14 +804,11 @@ def build_panel(args: argparse.Namespace) -> dict[str, Any]:
         )
         snapshots = build_statement_snapshots(statements, flow_fields, balance_fields)
 
-        market = pd.read_csv(market_path, usecols=MARKET_COLUMNS)
-        market["date"] = _normalize_date(market["date"], "market.date")
-        market["symbol"] = market["symbol"].astype("string").str.upper().str.strip()
-        market = market.loc[market["date"].between(start_date, end_date)].copy()
-        if market.empty:
-            raise ValueError("market CSV has no rows in the requested range")
-        if market.duplicated(["date", "symbol"]).any():
-            raise ValueError("market CSV contains duplicate (date, symbol) rows")
+        market, market_format = load_market_data(
+            market_path,
+            start_date=start_date,
+            end_date=end_date,
+        )
 
         daily = _read_year_month_dataset(
             store_root / "canonical" / "equity_daily" / "schema=v1",
@@ -854,8 +929,9 @@ def build_panel(args: argparse.Namespace) -> dict[str, Any]:
             "column_count": len(final_columns),
             "field_groups": _field_groups(final_columns),
             "sources": {
-                "market_csv": {
+                "market_data": {
                     "path": str(market_path),
+                    "format": market_format,
                     "size_bytes": int(market_path.stat().st_size),
                     "sha256": _sha256_file(market_path),
                 },
@@ -921,7 +997,15 @@ def build_panel(args: argparse.Namespace) -> dict[str, Any]:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--market-csv", required=True, help="Existing FactorMAD OHLCV CSV")
+    market_group = parser.add_mutually_exclusive_group(required=True)
+    market_group.add_argument(
+        "--market-data",
+        help="Existing OHLCV CSV or Parquet file",
+    )
+    market_group.add_argument(
+        "--market-csv",
+        help="Deprecated alias for a CSV market-data file",
+    )
     parser.add_argument("--data-store-root", required=True, help="Root containing canonical datasets")
     parser.add_argument("--output-root", required=True, help="New experiment output directory")
     parser.add_argument("--start-date", default="2007-01-04")

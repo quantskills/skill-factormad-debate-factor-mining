@@ -14,6 +14,8 @@ from prepare_fundamental_panel import (  # noqa: E402
     _add_ratio_features,
     attach_activation_dates,
     build_statement_snapshots,
+    load_market_data,
+    merge_statement_sources,
     _merge_asof_by_symbol,
 )
 
@@ -113,3 +115,82 @@ def test_daily_asof_join_never_backfills_before_activation() -> None:
     )
     assert np.isnan(result.loc[0, "fund_value"])
     assert result.loc[1:, "fund_value"].tolist() == [1.0, 1.0]
+
+
+def test_market_loader_accepts_csv_and_parquet(tmp_path: Path) -> None:
+    market = pd.DataFrame(
+        {
+            "date": [20200102, 20200103],
+            "symbol": ["000001.sz", "000002.SZ"],
+            "open": [10.0, 20.0],
+            "high": [11.0, 21.0],
+            "low": [9.0, 19.0],
+            "close": [10.5, 20.5],
+            "volume": [100.0, 200.0],
+            "amount": [1000.0, 4000.0],
+            "vwap": [10.0, 20.0],
+        }
+    )
+    csv_path = tmp_path / "market.csv"
+    parquet_path = tmp_path / "market.parquet"
+    market.to_csv(csv_path, index=False)
+    market.to_parquet(parquet_path, index=False)
+
+    loaded_csv, csv_format = load_market_data(
+        csv_path,
+        start_date=pd.Timestamp("2020-01-02"),
+        end_date=pd.Timestamp("2020-01-03"),
+    )
+    loaded_parquet, parquet_format = load_market_data(
+        parquet_path,
+        start_date=pd.Timestamp("2020-01-02"),
+        end_date=pd.Timestamp("2020-01-03"),
+    )
+
+    assert csv_format == "csv"
+    assert parquet_format == "parquet"
+    pd.testing.assert_frame_equal(loaded_csv, loaded_parquet, check_dtype=False)
+    assert loaded_parquet["symbol"].tolist() == ["000001.SZ", "000002.SZ"]
+
+
+def test_statement_source_merge_preserves_extended_only_rows() -> None:
+    base = pd.DataFrame(
+        {
+            "symbol": ["000001.SZ"],
+            "date": [20260331],
+            "quarter": ["2026q1"],
+            "if_adjusted": [1],
+            "available_date": [20260430],
+            "is_revenue": [10.0],
+        }
+    )
+    extended = pd.DataFrame(
+        {
+            "symbol": ["000001.SZ", "000002.SZ"],
+            "date": [20260331, 20260331],
+            "quarter": ["2026q1", "2026q1"],
+            "if_adjusted": [1, 1],
+            "available_date": [20260501, 20260430],
+            "bs_total_assets": [100.0, 200.0],
+        }
+    )
+
+    statements, base_fields, extended_fields, alignment = merge_statement_sources(
+        base, extended
+    )
+
+    assert len(statements) == 2
+    assert base_fields == ["is_revenue"]
+    assert extended_fields == ["bs_total_assets"]
+    assert alignment == {
+        "merge_policy": "outer_preserve_one_sided_rows",
+        "availability_merge_policy": "later_of_base_and_extended",
+        "base_only_rows": 0,
+        "extended_only_rows": 1,
+        "matched_rows": 1,
+        "available_date_conflicts": 1,
+    }
+    matched = statements.loc[statements["symbol"].eq("000001.SZ")].iloc[0]
+    assert matched["available_date"] == pd.Timestamp("2026-05-01")
+    extended_only = statements.loc[statements["symbol"].eq("000002.SZ")].iloc[0]
+    assert np.isnan(extended_only["is_revenue"])
